@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Java vs Bedrock Model Comparison</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #1e1e1e;
+            color: #fff;
+        }
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+        .viewer {
+            flex: 1;
+            position: relative;
+            border-right: 2px solid #333;
+        }
+        .viewer:last-child {
+            border-right: none;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .label {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .java { color: #4CAF50; }
+        .bedrock { color: #2196F3; }
+        #controls {
+            position: absolute;
+            top: 60px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 15px;
+            border-radius: 5px;
+            max-width: 300px;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+            color: #fff;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        #info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 12px;
+            max-width: 400px;
+        }
+        .cube-info {
+            margin: 5px 0;
+            padding: 5px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div class="viewer" id="javaViewer">
+            <div class="label java">Java Model</div>
+        </div>
+        <div class="viewer" id="bedrockViewer">
+            <div class="label bedrock">Bedrock Model (Converted)</div>
+        </div>
+    </div>
+    
+    <div id="controls">
+        <h3>Load Models</h3>
+        <label>Java Model (.json):</label>
+        <input type="file" id="javaFile" accept=".json">
+        <label>Bedrock Model (.json):</label>
+        <input type="file" id="bedrockFile" accept=".json">
+        <button onclick="compareModels()">Compare</button>
+        <button onclick="toggleGrid()">Toggle Grid</button>
+    </div>
+    
+    <div id="info">
+        <h4>Cube Comparison</h4>
+        <div id="cubeInfo">Load models to see comparison...</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let javaScene, bedrockScene;
+        let javaCamera, bedrockCamera;
+        let javaRenderer, bedrockRenderer;
+        let javaControls, bedrockControls;
+        let javaModel, bedrockModel;
+        let showGrid = true;
+
+        // Initialize scenes
+        function initScene(container, isJava) {
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x2a2a2a);
+            
+            const camera = new THREE.PerspectiveCamera(
+                75,
+                container.clientWidth / container.clientHeight,
+                0.1,
+                1000
+            );
+            camera.position.set(20, 20, 20);
+            camera.lookAt(0, 0, 0);
+            
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+            
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 10, 10);
+            scene.add(directionalLight);
+            
+            // Grid
+            const gridHelper = new THREE.GridHelper(32, 32, 0x444444, 0x222222);
+            scene.add(gridHelper);
+            
+            // Axes
+            const axesHelper = new THREE.AxesHelper(16);
+            scene.add(axesHelper);
+            
+            // Origin marker
+            const originGeometry = new THREE.SphereGeometry(0.5, 16, 16);
+            const originMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            const origin = new THREE.Mesh(originGeometry, originMaterial);
+            scene.add(origin);
+            
+            return { scene, camera, renderer };
+        }
+
+        // Initialize both viewers
+        const javaContainer = document.getElementById('javaViewer');
+        const bedrockContainer = document.getElementById('bedrockViewer');
+        
+        const javaSetup = initScene(javaContainer, true);
+        javaScene = javaSetup.scene;
+        javaCamera = javaSetup.camera;
+        javaRenderer = javaSetup.renderer;
+        
+        const bedrockSetup = initScene(bedrockContainer, false);
+        bedrockScene = bedrockSetup.scene;
+        bedrockCamera = bedrockSetup.camera;
+        bedrockRenderer = bedrockSetup.renderer;
+
+        // Simple orbit controls
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let rotation = { x: 0, y: 0 };
+
+        function setupMouseControls(renderer, camera) {
+            renderer.domElement.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+
+            renderer.domElement.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+                    
+                    rotation.y += deltaX * 0.01;
+                    rotation.x += deltaY * 0.01;
+                    
+                    const radius = 30;
+                    camera.position.x = radius * Math.sin(rotation.y) * Math.cos(rotation.x);
+                    camera.position.y = radius * Math.sin(rotation.x);
+                    camera.position.z = radius * Math.cos(rotation.y) * Math.cos(rotation.x);
+                    camera.lookAt(0, 8, 0);
+                    
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                }
+            });
+
+            renderer.domElement.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            renderer.domElement.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                const delta = e.deltaY * 0.01;
+                camera.position.multiplyScalar(1 + delta * 0.1);
+            });
+        }
+
+        setupMouseControls(javaRenderer, javaCamera);
+        setupMouseControls(bedrockRenderer, bedrockCamera);
+
+        // Load Java model
+        document.getElementById('javaFile').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    javaModel = JSON.parse(event.target.result);
+                    renderJavaModel();
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        // Load Bedrock model
+        document.getElementById('bedrockFile').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    bedrockModel = JSON.parse(event.target.result);
+                    renderBedrockModel();
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        function renderJavaModel() {
+            // Clear previous model
+            javaScene.children = javaScene.children.filter(child => 
+                child instanceof THREE.GridHelper || 
+                child instanceof THREE.AxesHelper || 
+                child instanceof THREE.Light ||
+                child.geometry instanceof THREE.SphereGeometry
+            );
+
+            if (!javaModel || !javaModel.elements) return;
+
+            javaModel.elements.forEach((element, index) => {
+                const from = element.from;
+                const to = element.to;
+                
+                // Java coordinates: origin at [8, 0, 8]
+                const width = to[0] - from[0];
+                const height = to[1] - from[1];
+                const depth = to[2] - from[2];
+                
+                const geometry = new THREE.BoxGeometry(width, height, depth);
+                const material = new THREE.MeshPhongMaterial({
+                    color: new THREE.Color().setHSL(index / javaModel.elements.length, 0.7, 0.5),
+                    transparent: true,
+                    opacity: 0.8,
+                    side: THREE.DoubleSide
+                });
+                
+                const cube = new THREE.Mesh(geometry, material);
+                
+                // Java position (center of cube)
+                cube.position.x = from[0] + width / 2 - 8;
+                cube.position.y = from[1] + height / 2;
+                cube.position.z = from[2] + depth / 2 - 8;
+                
+                // Apply rotation if exists
+                if (element.rotation) {
+                    const pivot = element.rotation.origin;
+                    const angle = element.rotation.angle * Math.PI / 180;
+                    const axis = element.rotation.axis;
+                    
+                    // Move to pivot, rotate, move back
+                    cube.position.x -= (pivot[0] - 8);
+                    cube.position.y -= pivot[1];
+                    cube.position.z -= (pivot[2] - 8);
+                    
+                    if (axis === 'x') cube.rotation.x = angle;
+                    else if (axis === 'y') cube.rotation.y = angle;
+                    else if (axis === 'z') cube.rotation.z = angle;
+                    
+                    cube.position.x += (pivot[0] - 8);
+                    cube.position.y += pivot[1];
+                    cube.position.z += (pivot[2] - 8);
+                }
+                
+                // Wireframe
+                const edges = new THREE.EdgesGeometry(geometry);
+                const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff }));
+                cube.add(line);
+                
+                javaScene.add(cube);
+            });
+        }
+
+        function renderBedrockModel() {
+            // Clear previous model
+            bedrockScene.children = bedrockScene.children.filter(child => 
+                child instanceof THREE.GridHelper || 
+                child instanceof THREE.AxesHelper || 
+                child instanceof THREE.Light ||
+                child.geometry instanceof THREE.SphereGeometry
+            );
+
+            if (!bedrockModel || !bedrockModel['minecraft:geometry']) return;
+
+            const geometry = bedrockModel['minecraft:geometry'][0];
+            if (!geometry.bones) return;
+
+            let cubeIndex = 0;
+            geometry.bones.forEach(bone => {
+                if (!bone.cubes) return;
+                
+                bone.cubes.forEach(cubeData => {
+                    const origin = cubeData.origin;
+                    const size = cubeData.size;
+                    
+                    const geometry = new THREE.BoxGeometry(size[0], size[1], size[2]);
+                    const material = new THREE.MeshPhongMaterial({
+                        color: new THREE.Color().setHSL(cubeIndex / 20, 0.7, 0.5),
+                        transparent: true,
+                        opacity: 0.8,
+                        side: THREE.DoubleSide
+                    });
+                    
+                    const cube = new THREE.Mesh(geometry, material);
+                    
+                    // Bedrock position (corner of cube)
+                    cube.position.x = origin[0] + size[0] / 2;
+                    cube.position.y = origin[1] + size[1] / 2;
+                    cube.position.z = origin[2] + size[2] / 2;
+                    
+                    // Apply rotation if exists
+                    if (cubeData.pivot && cubeData.rotation) {
+                        const pivot = cubeData.pivot;
+                        const rotation = cubeData.rotation;
+                        
+                        cube.position.x -= pivot[0];
+                        cube.position.y -= pivot[1];
+                        cube.position.z -= pivot[2];
+                        
+                        cube.rotation.x = rotation[0] * Math.PI / 180;
+                        cube.rotation.y = rotation[1] * Math.PI / 180;
+                        cube.rotation.z = rotation[2] * Math.PI / 180;
+                        
+                        cube.position.x += pivot[0];
+                        cube.position.y += pivot[1];
+                        cube.position.z += pivot[2];
+                    } else if (bone.pivot && bone.rotation) {
+                        const pivot = bone.pivot;
+                        const rotation = bone.rotation;
+                        
+                        cube.position.x -= pivot[0];
+                        cube.position.y -= pivot[1];
+                        cube.position.z -= pivot[2];
+                        
+                        cube.rotation.x = rotation[0] * Math.PI / 180;
+                        cube.rotation.y = rotation[1] * Math.PI / 180;
+                        cube.rotation.z = rotation[2] * Math.PI / 180;
+                        
+                        cube.position.x += pivot[0];
+                        cube.position.y += pivot[1];
+                        cube.position.z += pivot[2];
+                    }
+                    
+                    // Wireframe
+                    const edges = new THREE.EdgesGeometry(geometry);
+                    const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff }));
+                    cube.add(line);
+                    
+                    bedrockScene.add(cube);
+                    cubeIndex++;
+                });
+            });
+        }
+
+        function compareModels() {
+            if (!javaModel || !bedrockModel) {
+                alert('Please load both models first!');
+                return;
+            }
+
+            const infoDiv = document.getElementById('cubeInfo');
+            let html = '<h4>Comparison Results:</h4>';
+            
+            const javaElements = javaModel.elements || [];
+            const bedrockGeometry = bedrockModel['minecraft:geometry'][0];
+            let bedrockCubes = [];
+            
+            if (bedrockGeometry && bedrockGeometry.bones) {
+                bedrockGeometry.bones.forEach(bone => {
+                    if (bone.cubes) {
+                        bone.cubes.forEach(cube => bedrockCubes.push(cube));
+                    }
+                });
+            }
+            
+            html += `<div class="cube-info">Java Elements: ${javaElements.length}</div>`;
+            html += `<div class="cube-info">Bedrock Cubes: ${bedrockCubes.length}</div>`;
+            
+            if (javaElements.length > 0 && bedrockCubes.length > 0) {
+                html += '<h5>First Cube Comparison:</h5>';
+                const javaEl = javaElements[0];
+                const bedrockCube = bedrockCubes[0];
+                
+                html += `<div class="cube-info">
+                    <strong>Java:</strong><br>
+                    from: [${javaEl.from.join(', ')}]<br>
+                    to: [${javaEl.to.join(', ')}]
+                </div>`;
+                
+                html += `<div class="cube-info">
+                    <strong>Bedrock:</strong><br>
+                    origin: [${bedrockCube.origin.join(', ')}]<br>
+                    size: [${bedrockCube.size.join(', ')}]
+                </div>`;
+                
+                html += `<div class="cube-info">
+                    <strong>Expected Bedrock origin:</strong><br>
+                    [-to[0] + 8, from[1], from[2] - 8] = [${-javaEl.to[0] + 8}, ${javaEl.from[1]}, ${javaEl.from[2] - 8}]
+                </div>`;
+            }
+            
+            infoDiv.innerHTML = html;
+        }
+
+        function toggleGrid() {
+            showGrid = !showGrid;
+            javaScene.children.forEach(child => {
+                if (child instanceof THREE.GridHelper) {
+                    child.visible = showGrid;
+                }
+            });
+            bedrockScene.children.forEach(child => {
+                if (child instanceof THREE.GridHelper) {
+                    child.visible = showGrid;
+                }
+            });
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            javaRenderer.render(javaScene, javaCamera);
+            bedrockRenderer.render(bedrockScene, bedrockCamera);
+        }
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            const javaContainer = document.getElementById('javaViewer');
+            const bedrockContainer = document.getElementById('bedrockViewer');
+            
+            javaCamera.aspect = javaContainer.clientWidth / javaContainer.clientHeight;
+            javaCamera.updateProjectionMatrix();
+            javaRenderer.setSize(javaContainer.clientWidth, javaContainer.clientHeight);
+            
+            bedrockCamera.aspect = bedrockContainer.clientWidth / bedrockContainer.clientHeight;
+            bedrockCamera.updateProjectionMatrix();
+            bedrockRenderer.setSize(bedrockContainer.clientWidth, bedrockContainer.clientHeight);
+        });
+    </script>
+</body>
+</html>
