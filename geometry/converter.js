@@ -464,7 +464,7 @@ async function main() {
         
         // Convert all paths to absolute paths for spritesheet-js
         const absolutePaths = processedPaths.map(p => path.resolve(p));
-        const cmd = `spritesheet-js -f json --name "${path.resolve(spritesheetPath)}" --algorithm binary-tree --padding 1 --fullpath ${absolutePaths.map(p => `"${p}"`).join(' ')}`;
+        const cmd = `spritesheet-js -f json --name "${path.resolve(spritesheetPath)}" --padding 1 --fullpath ${absolutePaths.map(p => `"${p}"`).join(' ')}`;
         
         execSync(cmd, { stdio: 'inherit' });
         
