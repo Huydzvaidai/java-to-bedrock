@@ -15,6 +15,7 @@ class JavaToBedrockConverter {
   calculateUV(face, textureKey, javaModel) {
     if (!face || !face.uv) return null;
 
+    // Resolve texture reference (e.g., "#1" -> "shine_oni:texture")
     const textureRef = javaModel.textures[textureKey.substring(1)];
     if (!textureRef) return null;
 
@@ -26,29 +27,35 @@ class JavaToBedrockConverter {
       };
     }
 
-    // Find texture in spritesheet by matching path
+    // Clean the texture path (remove namespace prefix)
     const cleanPath = textureRef.replace(/^[^:]+:/, '').replace(/\\/g, '/');
     let textureData = null;
     
-    // Try multiple matching strategies
+    // Try to find texture in spritesheet frames
+    // The spritesheet keys are full file paths, so we need to match them
     for (const [framePath, data] of Object.entries(this.spritesheetData.frames)) {
       const normalizedFramePath = framePath.replace(/\\/g, '/');
       
-      // Match by filename or full path
-      if (normalizedFramePath.includes(cleanPath + '.png') || 
-          normalizedFramePath.includes(cleanPath + '_cropped.png') ||
-          normalizedFramePath.endsWith('/' + cleanPath + '.png') ||
-          normalizedFramePath.endsWith('/' + cleanPath + '_cropped.png')) {
+      // Try multiple matching strategies:
+      // 1. Full path match with .png
+      // 2. Full path match with _cropped.png
+      // 3. Ends with the texture path
+      // 4. Contains the texture filename
+      if (normalizedFramePath.includes('/' + cleanPath + '.png') || 
+          normalizedFramePath.includes('/' + cleanPath + '_cropped.png') ||
+          normalizedFramePath.endsWith(cleanPath + '.png') ||
+          normalizedFramePath.endsWith(cleanPath + '_cropped.png')) {
         textureData = data;
         break;
       }
     }
 
+    // Fallback: try matching just the filename
     if (!textureData) {
-      // Fallback: try matching just the filename
       const filename = cleanPath.split('/').pop();
       for (const [framePath, data] of Object.entries(this.spritesheetData.frames)) {
-        if (framePath.includes(filename + '.png') || framePath.includes(filename + '_cropped.png')) {
+        const frameFilename = framePath.split(/[/\\]/).pop().replace('_cropped.png', '.png');
+        if (frameFilename === filename + '.png') {
           textureData = data;
           break;
         }
@@ -56,7 +63,7 @@ class JavaToBedrockConverter {
     }
 
     if (!textureData) {
-      console.warn(`  ⚠️  Texture not found in atlas: ${textureRef} (${cleanPath})`);
+      // If texture not found in atlas, return simple UV
       return {
         uv: [face.uv[0], face.uv[1]],
         uv_size: [face.uv[2] - face.uv[0], face.uv[3] - face.uv[1]]
@@ -454,7 +461,7 @@ async function main() {
       // Generate spritesheet for namespace
       try {
         const spritesheetPath = path.join(namespaceOutputDir, namespace);
-        const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --fullpath ${processedPaths.map(p => `"${p}"`).join(' ')}`;
+        const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --algorithm binary-tree --padding 1 --fullpath ${processedPaths.map(p => `"${p}"`).join(' ')}`;
         
         execSync(cmd, { stdio: 'inherit' });
         
