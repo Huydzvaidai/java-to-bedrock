@@ -240,14 +240,10 @@ class JavaToBedrockConverter {
    * Convert Java model to Bedrock format
    */
   convert(javaModel, modelName, outputDir, assetsDir) {
-    // Use atlas dimensions if available, otherwise use model texture size
-    if (this.spritesheetData && this.spritesheetData.meta) {
-      this.textureWidth = this.spritesheetData.meta.size.w;
-      this.textureHeight = this.spritesheetData.meta.size.h;
-    } else if (javaModel.texture_size) {
-      this.textureWidth = javaModel.texture_size[0];
-      this.textureHeight = javaModel.texture_size[1];
-    }
+    // Always use 16x16 as texture dimensions (like converter.sh)
+    // UV coordinates are calculated relative to atlas, not texture size
+    this.textureWidth = 16;
+    this.textureHeight = 16;
 
     if (!javaModel.elements || javaModel.elements.length === 0) {
       throw new Error('No elements found in model');
