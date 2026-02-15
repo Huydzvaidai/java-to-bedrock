@@ -167,80 +167,20 @@ class JavaToBedrockConverter {
   }
 
   /**
-   * Group cubes by rotation pivot (exact logic from converter.sh)
+   * Group cubes by rotation pivot (simplified - all in one bone)
    */
   groupCubesByRotation(elements, javaModel) {
     const cubes = elements.map(el => this.convertElement(el, javaModel));
     
-    // Get unique rotations
-    const rotations = [];
-    elements.forEach(el => {
-      if (el.rotation) {
-        const key = JSON.stringify({
-          origin: el.rotation.origin,
-          angle: el.rotation.angle,
-          axis: el.rotation.axis
-        });
-        
-        if (!rotations.find(r => r.key === key)) {
-          rotations.push({
-            key,
-            origin: el.rotation.origin,
-            angle: el.rotation.angle,
-            axis: el.rotation.axis
-          });
-        }
-      }
-    });
-
-    const roundit = (val) => Math.round(val * 10000) / 10000;
-
-    // Create rotation groups
-    const groups = rotations.map(rot => {
-      const pivot = [
-        roundit(-rot.origin[0] + 8),
-        roundit(rot.origin[1]),
-        roundit(rot.origin[2] - 8)
-      ];
-
-      const rotation = [
-        rot.axis === 'x' ? -rot.angle : 0,
-        rot.axis === 'y' ? -rot.angle : 0,
-        rot.axis === 'z' ? rot.angle : 0
-      ];
-
-      const groupCubes = [];
-      
-      cubes.forEach((cube, idx) => {
-        if (elements[idx].rotation &&
-            JSON.stringify(cube.rotation) === JSON.stringify(rotation) &&
-            JSON.stringify(cube.pivot) === JSON.stringify(pivot)) {
-          const cubeWithoutPivot = { ...cube };
-          delete cubeWithoutPivot.pivot;
-          delete cubeWithoutPivot.rotation;
-          groupCubes.push(cubeWithoutPivot);
-        }
-      });
-
-      return {
-        pivot,
-        rotation,
-        cubes: groupCubes
-      };
-    });
-
-    // Get cubes without rotation
-    const noPivotCubes = [];
+    // Add pivot and rotation info to each cube
     cubes.forEach((cube, idx) => {
-      if (!elements[idx].rotation) {
-        const cubeWithoutPivot = { ...cube };
-        delete cubeWithoutPivot.pivot;
-        delete cubeWithoutPivot.rotation;
-        noPivotCubes.push(cubeWithoutPivot);
+      if (elements[idx].rotation) {
+        // Keep pivot and rotation in the cube itself
+        // They will be preserved when added to camfire_item
       }
     });
 
-    return { groups, noPivotCubes };
+    return { allCubes: cubes };
   }
 
   /**
@@ -259,13 +199,13 @@ class JavaToBedrockConverter {
     // Note: spritesheet is already generated at namespace level
     // this.spritesheetData should already be set
 
-    // Group cubes by rotation
-    const { groups, noPivotCubes } = this.groupCubesByRotation(
+    // Group all cubes into one bone
+    const { allCubes } = this.groupCubesByRotation(
       javaModel.elements,
       javaModel
     );
 
-    // Build bone structure (exact structure from converter.sh)
+    // Build bone structure with single camfire_item bone
     const bones = [
       {
         name: "campfire",
@@ -285,21 +225,15 @@ class JavaToBedrockConverter {
       {
         name: "campfire_z",
         parent: "campfire_y",
+        pivot: [0, 8, 0]
+      },
+      {
+        name: "camfire_item",
+        parent: "campfire_z",
         pivot: [0, 8, 0],
-        cubes: noPivotCubes
+        cubes: allCubes
       }
     ];
-
-    // Add rotation groups as bones
-    groups.forEach((group, index) => {
-      bones.push({
-        name: `rot_${index + 1}`,
-        parent: "campfire_z",
-        pivot: group.pivot,
-        rotation: group.rotation,
-        cubes: group.cubes
-      });
-    });
 
     return {
       format_version: "1.21.0",
@@ -360,29 +294,38 @@ async function main() {
     return fileList;
   }
   
-  // Collect all unique textures in a namespace
-  function collectAllTexturesInNamespace(namespaceDir) {
-    const texturesDir = path.join(namespaceDir, 'textures');
-    if (!fs.existsSync(texturesDir)) return [];
+  // Collect all unique textures in a namespace (only from models with elements)
+  function collectAllTexturesInNamespace(namespaceDir, modelFiles) {
+    const texturePaths = new Set();
     
-    const texturePaths = [];
-    
-    function scanTextures(dir) {
-      const files = fs.readdirSync(dir);
-      files.forEach(file => {
-        const filePath = path.join(dir, file);
-        const stat = fs.statSync(filePath);
+    // Only collect textures from models that have elements
+    for (const modelFile of modelFiles) {
+      try {
+        const modelData = JSON.parse(fs.readFileSync(modelFile, 'utf-8'));
         
-        if (stat.isDirectory()) {
-          scanTextures(filePath);
-        } else if (file.endsWith('.png')) {
-          texturePaths.push(filePath);
+        // Skip if no elements
+        if (!modelData.elements || modelData.elements.length === 0) {
+          continue;
         }
-      });
+        
+        // Collect textures from this model
+        if (modelData.textures) {
+          for (const textureRef of Object.values(modelData.textures)) {
+            const cleanPath = textureRef.replace(/^[^:]+:/, '');
+            const texturePath = path.join(namespaceDir, 'textures', cleanPath + '.png');
+            
+            if (fs.existsSync(texturePath)) {
+              texturePaths.add(texturePath);
+            }
+          }
+        }
+      } catch (error) {
+        // Skip invalid models
+        continue;
+      }
     }
     
-    scanTextures(texturesDir);
-    return texturePaths;
+    return Array.from(texturePaths);
   }
   
   console.log(`🔍 Scanning for models in ${assetsDir}...\n`);
@@ -431,7 +374,7 @@ async function main() {
     
     // Generate ONE atlas for entire namespace
     console.log(`🎨 Generating atlas for namespace: ${namespace}`);
-    const allTextures = collectAllTexturesInNamespace(namespaceAssetsDir);
+    const allTextures = collectAllTexturesInNamespace(namespaceAssetsDir, files);
     
     if (allTextures.length > 0) {
       console.log(`  📦 Found ${allTextures.length} texture(s) in namespace`);
