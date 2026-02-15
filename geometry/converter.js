@@ -462,9 +462,9 @@ async function main() {
       try {
         const spritesheetPath = path.join(namespaceOutputDir, namespace);
         
-        // Convert all paths to absolute paths for spritesheet-js
+        // Convert input paths to absolute, but keep output path relative
         const absolutePaths = processedPaths.map(p => path.resolve(p));
-        const cmd = `spritesheet-js -f json --name "${path.resolve(spritesheetPath)}" --padding 1 --fullpath ${absolutePaths.map(p => `"${p}"`).join(' ')}`;
+        const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --padding 1 --fullpath ${absolutePaths.map(p => `"${p}"`).join(' ')}`;
         
         execSync(cmd, { stdio: 'inherit' });
         
