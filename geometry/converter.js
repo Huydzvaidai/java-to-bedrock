@@ -10,109 +10,6 @@ class JavaToBedrockConverter {
   }
 
   /**
-   * Collect all unique texture paths from model
-   */
-  collectTexturePaths(javaModel, assetsDir) {
-    const texturePaths = [];
-    const seen = new Set();
-    
-    if (!javaModel.textures) return texturePaths;
-    
-    for (const [key, value] of Object.entries(javaModel.textures)) {
-      const cleanPath = value.replace(/^[^:]+:/, '');
-      const texturePath = path.join(assetsDir, 'textures', cleanPath + '.png');
-      
-      if (!seen.has(texturePath) && fs.existsSync(texturePath)) {
-        texturePaths.push(texturePath);
-        seen.add(texturePath);
-      }
-    }
-    
-    return texturePaths;
-  }
-
-  /**
-   * Crop animated textures to first frame
-   */
-  cropAnimatedTextures(texturePaths) {
-    const croppedPaths = [];
-    
-    for (const texturePath of texturePaths) {
-      const mcmetaPath = texturePath + '.mcmeta';
-      
-      // Check if this is an animated texture
-      if (fs.existsSync(mcmetaPath)) {
-        try {
-          // Use ImageMagick to crop to square (first frame)
-          const tempPath = texturePath.replace('.png', '_cropped.png');
-          execSync(`convert "${texturePath}" -set option:distort:viewport "%[fx:min(w,h)]x%[fx:min(w,h)]" -distort affine "0,0 0,0" -define png:format=png8 -clamp "${tempPath}"`, {
-            stdio: 'pipe'
-          });
-          croppedPaths.push(tempPath);
-          console.log(`  🎞️  Cropped animated texture: ${path.basename(texturePath)}`);
-        } catch (error) {
-          console.warn(`  ⚠️  Failed to crop ${path.basename(texturePath)}, using original`);
-          croppedPaths.push(texturePath);
-        }
-      } else {
-        croppedPaths.push(texturePath);
-      }
-    }
-    
-    return croppedPaths;
-  }
-
-  /**
-   * Generate spritesheet from all textures in model
-   */
-  generateSpritesheet(javaModel, outputName, outputDir, assetsDir) {
-    // Collect all texture paths from model
-    const texturePaths = this.collectTexturePaths(javaModel, assetsDir);
-    
-    if (texturePaths.length === 0) {
-      console.log(`  ⚠️  No textures found`);
-      return null;
-    }
-
-    console.log(`  📦 Found ${texturePaths.length} texture(s) to atlas`);
-
-    // Crop animated textures first
-    const processedPaths = this.cropAnimatedTextures(texturePaths);
-
-    try {
-      const spritesheetPath = path.join(outputDir, outputName);
-      const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --fullpath ${processedPaths.map(p => `"${p}"`).join(' ')}`;
-      
-      execSync(cmd, { stdio: 'inherit' });
-      
-      // Clean up cropped temp files
-      processedPaths.forEach(p => {
-        if (p.includes('_cropped.png')) {
-          try { fs.unlinkSync(p); } catch (e) {}
-        }
-      });
-      
-      const jsonPath = `${spritesheetPath}.json`;
-      const pngPath = `${spritesheetPath}.png`;
-      
-      if (fs.existsSync(jsonPath) && fs.existsSync(pngPath)) {
-        this.spritesheetData = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
-        console.log(`  ✅ Generated spritesheet: ${outputName}.png (${this.spritesheetData.meta.size.w}x${this.spritesheetData.meta.size.h})`);
-        
-        // Clean up the JSON metadata file
-        try { fs.unlinkSync(jsonPath); } catch (e) {}
-        
-        return `${outputName}.png`;
-      } else {
-        console.warn(`  ⚠️  Spritesheet files not created`);
-      }
-    } catch (error) {
-      console.warn(`  ⚠️  Spritesheet generation failed: ${error.message}`);
-    }
-    return null;
-  }
-
-  /**
    * Calculate UV coordinates in atlas space (exact formula from converter.sh)
    */
   calculateUV(face, textureKey, javaModel) {
@@ -334,8 +231,8 @@ class JavaToBedrockConverter {
       throw new Error('No elements found in model');
     }
 
-    // Generate spritesheet from ALL textures in model
-    this.generateSpritesheet(javaModel, modelName, outputDir, assetsDir);
+    // Note: spritesheet is already generated at namespace level
+    // this.spritesheetData should already be set
 
     // Group cubes by rotation
     const { groups, noPivotCubes } = this.groupCubesByRotation(
@@ -438,6 +335,31 @@ async function main() {
     return fileList;
   }
   
+  // Collect all unique textures in a namespace
+  function collectAllTexturesInNamespace(namespaceDir) {
+    const texturesDir = path.join(namespaceDir, 'textures');
+    if (!fs.existsSync(texturesDir)) return [];
+    
+    const texturePaths = [];
+    
+    function scanTextures(dir) {
+      const files = fs.readdirSync(dir);
+      files.forEach(file => {
+        const filePath = path.join(dir, file);
+        const stat = fs.statSync(filePath);
+        
+        if (stat.isDirectory()) {
+          scanTextures(filePath);
+        } else if (file.endsWith('.png')) {
+          texturePaths.push(filePath);
+        }
+      });
+    }
+    
+    scanTextures(texturesDir);
+    return texturePaths;
+  }
+  
   console.log(`🔍 Scanning for models in ${assetsDir}...\n`);
   const modelFiles = findModelFiles(assetsDir);
   
@@ -446,7 +368,19 @@ async function main() {
     process.exit(1);
   }
   
-  console.log(`📦 Found ${modelFiles.length} model files\n`);
+  // Group models by namespace
+  const modelsByNamespace = {};
+  modelFiles.forEach(filePath => {
+    const relativePath = path.relative(assetsDir, filePath);
+    const namespace = relativePath.split(path.sep)[0];
+    
+    if (!modelsByNamespace[namespace]) {
+      modelsByNamespace[namespace] = [];
+    }
+    modelsByNamespace[namespace].push(filePath);
+  });
+  
+  console.log(`📦 Found ${modelFiles.length} model files in ${Object.keys(modelsByNamespace).length} namespace(s)\n`);
   
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
@@ -457,45 +391,130 @@ async function main() {
   let skippedCount = 0;
   const failedModels = [];
   
-  for (const filePath of modelFiles) {
-    const relativePath = path.relative(assetsDir, filePath);
-    const parts = relativePath.split(path.sep);
-    const namespace = parts[0];
-    const modelPath = parts.slice(2, -1).join('/');
-    const fileName = path.basename(filePath, '.json');
-    const modelName = `${namespace}_${modelPath ? modelPath + '_' : ''}${fileName}`.replace(/\//g, '_');
+  // Process each namespace
+  for (const [namespace, files] of Object.entries(modelsByNamespace)) {
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`� Processing namespace: ${namespace}`);
+    console.log(`${'='.repeat(60)}\n`);
     
-    try {
-      console.log(`📥 [${successCount + failCount + skippedCount + 1}/${modelFiles.length}] ${namespace}/${modelPath}/${fileName}`);
+    const namespaceAssetsDir = path.join(assetsDir, namespace);
+    const namespaceOutputDir = path.join(outputDir, namespace);
+    
+    if (!fs.existsSync(namespaceOutputDir)) {
+      fs.mkdirSync(namespaceOutputDir, { recursive: true });
+    }
+    
+    // Generate ONE atlas for entire namespace
+    console.log(`🎨 Generating atlas for namespace: ${namespace}`);
+    const allTextures = collectAllTexturesInNamespace(namespaceAssetsDir);
+    
+    if (allTextures.length > 0) {
+      console.log(`  📦 Found ${allTextures.length} texture(s) in namespace`);
       
-      const javaModelJson = fs.readFileSync(filePath, 'utf-8');
-      const javaModel = JSON.parse(javaModelJson);
-      
-      if (!javaModel.elements || javaModel.elements.length === 0) {
-        console.log(`⏭️  Skipped (no elements)\n`);
-        skippedCount++;
-        continue;
+      // Crop animated textures
+      const processedPaths = [];
+      for (const texturePath of allTextures) {
+        const mcmetaPath = texturePath + '.mcmeta';
+        
+        if (fs.existsSync(mcmetaPath)) {
+          try {
+            const tempPath = texturePath.replace('.png', '_cropped.png');
+            execSync(`convert "${texturePath}" -set option:distort:viewport "%[fx:min(w,h)]x%[fx:min(w,h)]" -distort affine "0,0 0,0" -define png:format=png8 -clamp "${tempPath}"`, {
+              stdio: 'pipe'
+            });
+            processedPaths.push(tempPath);
+            console.log(`  🎞️  Cropped animated: ${path.basename(texturePath)}`);
+          } catch (error) {
+            console.warn(`  ⚠️  Failed to crop ${path.basename(texturePath)}, using original`);
+            processedPaths.push(texturePath);
+          }
+        } else {
+          processedPaths.push(texturePath);
+        }
       }
       
-      const namespaceOutputDir = path.join(outputDir, namespace, modelPath || '');
-      if (!fs.existsSync(namespaceOutputDir)) {
-        fs.mkdirSync(namespaceOutputDir, { recursive: true });
+      // Generate spritesheet for namespace
+      try {
+        const spritesheetPath = path.join(namespaceOutputDir, namespace);
+        const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --fullpath ${processedPaths.map(p => `"${p}"`).join(' ')}`;
+        
+        execSync(cmd, { stdio: 'inherit' });
+        
+        // Clean up cropped temp files
+        processedPaths.forEach(p => {
+          if (p.includes('_cropped.png')) {
+            try { fs.unlinkSync(p); } catch (e) {}
+          }
+        });
+        
+        const jsonPath = `${spritesheetPath}.json`;
+        const pngPath = `${spritesheetPath}.png`;
+        
+        if (fs.existsSync(jsonPath) && fs.existsSync(pngPath)) {
+          const spritesheetData = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+          console.log(`  ✅ Generated atlas: ${namespace}.png (${spritesheetData.meta.size.w}x${spritesheetData.meta.size.h})\n`);
+          
+          // Store spritesheet data for all converters in this namespace
+          const sharedConverter = new JavaToBedrockConverter();
+          sharedConverter.spritesheetData = spritesheetData;
+          
+          // Convert all models in namespace using shared atlas
+          for (const filePath of files) {
+            const relativePath = path.relative(assetsDir, filePath);
+            const parts = relativePath.split(path.sep);
+            const modelPath = parts.slice(2, -1).join('/');
+            const fileName = path.basename(filePath, '.json');
+            const modelName = `${namespace}_${modelPath ? modelPath + '_' : ''}${fileName}`.replace(/\//g, '_');
+            
+            try {
+              console.log(`📥 [${successCount + failCount + skippedCount + 1}/${modelFiles.length}] ${namespace}/${modelPath}/${fileName}`);
+              
+              const javaModelJson = fs.readFileSync(filePath, 'utf-8');
+              const javaModel = JSON.parse(javaModelJson);
+              
+              if (!javaModel.elements || javaModel.elements.length === 0) {
+                console.log(`⏭️  Skipped (no elements)\n`);
+                skippedCount++;
+                continue;
+              }
+              
+              const modelOutputDir = path.join(namespaceOutputDir, modelPath || '');
+              if (!fs.existsSync(modelOutputDir)) {
+                fs.mkdirSync(modelOutputDir, { recursive: true });
+              }
+              
+              // Use shared converter with atlas data
+              const bedrockModel = sharedConverter.convert(javaModel, modelName, modelOutputDir, namespaceAssetsDir);
+              
+              const outputPath = path.join(modelOutputDir, `${fileName}.json`);
+              fs.writeFileSync(outputPath, JSON.stringify(bedrockModel, null, 2));
+              
+              console.log(`✅ Converted → ${path.relative(outputDir, outputPath)}\n`);
+              successCount++;
+              
+            } catch (error) {
+              console.error(`❌ Failed: ${error.message}\n`);
+              failCount++;
+              failedModels.push({ name: modelName, path: relativePath, error: error.message });
+            }
+          }
+          
+          // Clean up JSON metadata
+          try { fs.unlinkSync(jsonPath); } catch (e) {}
+          
+        } else {
+          console.warn(`  ⚠️  Atlas files not created, skipping namespace\n`);
+          skippedCount += files.length;
+        }
+        
+      } catch (error) {
+        console.error(`  ❌ Atlas generation failed: ${error.message}\n`);
+        skippedCount += files.length;
       }
       
-      const namespaceAssetsDir = path.join(assetsDir, namespace);
-      const converter = new JavaToBedrockConverter();
-      const bedrockModel = converter.convert(javaModel, modelName, namespaceOutputDir, namespaceAssetsDir);
-      
-      const outputPath = path.join(namespaceOutputDir, `${fileName}.json`);
-      fs.writeFileSync(outputPath, JSON.stringify(bedrockModel, null, 2));
-      
-      console.log(`✅ Converted → ${path.relative(outputDir, outputPath)}\n`);
-      successCount++;
-      
-    } catch (error) {
-      console.error(`❌ Failed: ${error.message}\n`);
-      failCount++;
-      failedModels.push({ name: modelName, path: relativePath, error: error.message });
+    } else {
+      console.log(`  ⚠️  No textures found in namespace, skipping\n`);
+      skippedCount += files.length;
     }
   }
   
