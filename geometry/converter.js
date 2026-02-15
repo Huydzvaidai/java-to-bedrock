@@ -464,7 +464,7 @@ async function main() {
         
         // Convert input paths to absolute, but keep output path relative
         const absolutePaths = processedPaths.map(p => path.resolve(p));
-        const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --padding 1 --fullpath ${absolutePaths.map(p => `"${p}"`).join(' ')}`;
+        const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --padding 0 --fullpath ${absolutePaths.map(p => `"${p}"`).join(' ')}`;
         
         execSync(cmd, { stdio: 'inherit' });
         
