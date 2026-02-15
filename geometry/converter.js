@@ -461,7 +461,10 @@ async function main() {
       // Generate spritesheet for namespace
       try {
         const spritesheetPath = path.join(namespaceOutputDir, namespace);
-        const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --algorithm binary-tree --padding 1 --fullpath ${processedPaths.map(p => `"${p}"`).join(' ')}`;
+        
+        // Convert all paths to absolute paths for spritesheet-js
+        const absolutePaths = processedPaths.map(p => path.resolve(p));
+        const cmd = `spritesheet-js -f json --name "${path.resolve(spritesheetPath)}" --algorithm binary-tree --padding 1 --fullpath ${absolutePaths.map(p => `"${p}"`).join(' ')}`;
         
         execSync(cmd, { stdio: 'inherit' });
         
