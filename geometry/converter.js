@@ -27,17 +27,36 @@ class JavaToBedrockConverter {
     }
 
     // Find texture in spritesheet by matching path
-    const cleanPath = textureRef.replace(/^[^:]+:/, '');
+    const cleanPath = textureRef.replace(/^[^:]+:/, '').replace(/\\/g, '/');
     let textureData = null;
     
+    // Try multiple matching strategies
     for (const [framePath, data] of Object.entries(this.spritesheetData.frames)) {
-      if (framePath.includes(cleanPath + '.png') || framePath.includes(cleanPath + '_cropped.png')) {
+      const normalizedFramePath = framePath.replace(/\\/g, '/');
+      
+      // Match by filename or full path
+      if (normalizedFramePath.includes(cleanPath + '.png') || 
+          normalizedFramePath.includes(cleanPath + '_cropped.png') ||
+          normalizedFramePath.endsWith('/' + cleanPath + '.png') ||
+          normalizedFramePath.endsWith('/' + cleanPath + '_cropped.png')) {
         textureData = data;
         break;
       }
     }
 
     if (!textureData) {
+      // Fallback: try matching just the filename
+      const filename = cleanPath.split('/').pop();
+      for (const [framePath, data] of Object.entries(this.spritesheetData.frames)) {
+        if (framePath.includes(filename + '.png') || framePath.includes(filename + '_cropped.png')) {
+          textureData = data;
+          break;
+        }
+      }
+    }
+
+    if (!textureData) {
+      console.warn(`  ⚠️  Texture not found in atlas: ${textureRef} (${cleanPath})`);
       return {
         uv: [face.uv[0], face.uv[1]],
         uv_size: [face.uv[2] - face.uv[0], face.uv[3] - face.uv[1]]
@@ -221,8 +240,11 @@ class JavaToBedrockConverter {
    * Convert Java model to Bedrock format
    */
   convert(javaModel, modelName, outputDir, assetsDir) {
-    // Extract texture size
-    if (javaModel.texture_size) {
+    // Use atlas dimensions if available, otherwise use model texture size
+    if (this.spritesheetData && this.spritesheetData.meta) {
+      this.textureWidth = this.spritesheetData.meta.size.w;
+      this.textureHeight = this.spritesheetData.meta.size.h;
+    } else if (javaModel.texture_size) {
       this.textureWidth = javaModel.texture_size[0];
       this.textureHeight = javaModel.texture_size[1];
     }
