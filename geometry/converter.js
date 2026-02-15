@@ -9,62 +9,57 @@ class JavaToBedrockConverter {
     this.spritesheetData = null;
   }
 
-  generateSpritesheet(javaModel, modelName, outputDir) {
-    const texturesDir = path.join(outputDir, 'textures_temp');
-    if (!fs.existsSync(texturesDir)) {
-      fs.mkdirSync(texturesDir, { recursive: true });
-    }
+  /**
+   * Generate spritesheet from textures using spritesheet-js
+   */
+  generateSpritesheet(texturePaths, outputName, outputDir) {
+    if (texturePaths.length === 0) return null;
 
-    const texturePaths = [];
-    if (javaModel.textures) {
-      for (const [key, value] of Object.entries(javaModel.textures)) {
-        const cleanPath = value.replace(/^[^:]+:/, '');
-        const texturePath = path.join(path.dirname(outputDir), 'textures', cleanPath + '.png');
-        if (fs.existsSync(texturePath)) {
-          texturePaths.push(texturePath);
-        }
-      }
-    }
-
-    if (texturePaths.length === 0) {
-      return null;
-    }
-
-    const spritesheetPath = path.join(outputDir, modelName);
     try {
-      execSync(`spritesheet-js -f json --name ${spritesheetPath} --fullpath ${texturePaths.join(' ')}`, {
-        stdio: 'pipe'
-      });
+      const spritesheetPath = path.join(outputDir, outputName);
+      const cmd = `spritesheet-js -f json --name ${spritesheetPath} --fullpath ${texturePaths.join(' ')}`;
       
-      const spritesheetJsonPath = `${spritesheetPath}.json`;
-      if (fs.existsSync(spritesheetJsonPath)) {
-        this.spritesheetData = JSON.parse(fs.readFileSync(spritesheetJsonPath, 'utf-8'));
-        return `${modelName}.png`;
+      execSync(cmd, { stdio: 'pipe' });
+      
+      const jsonPath = `${spritesheetPath}.json`;
+      if (fs.existsSync(jsonPath)) {
+        this.spritesheetData = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+        return `${outputName}.png`;
       }
     } catch (error) {
-      // Silently fail spritesheet generation
+      console.warn(`⚠️  Spritesheet generation failed: ${error.message}`);
     }
-
     return null;
   }
 
-  getTextureData(texturePath, assetsBase) {
-    if (!this.spritesheetData || !this.spritesheetData.frames) {
-      return null;
-    }
-
-    const cleanPath = texturePath.replace(/^[^:]+:/, '');
-    const fullPath = path.join(assetsBase, 'textures', cleanPath + '.png');
-    return this.spritesheetData.frames[fullPath];
-  }
-
-  calculateUV(face, textureKey, javaModel, assetsBase) {
+  /**
+   * Calculate UV coordinates in atlas space (exact formula from converter.sh)
+   */
+  calculateUV(face, textureKey, javaModel, texturePaths) {
     if (!face || !face.uv) return null;
 
-    const texturePath = javaModel.textures[textureKey.substring(1)];
-    if (!texturePath) return null;
+    const textureRef = javaModel.textures[textureKey.substring(1)];
+    if (!textureRef) return null;
 
-    const textureData = this.getTextureData(texturePath, assetsBase);
+    // If no spritesheet, use simple UV
+    if (!this.spritesheetData || !this.spritesheetData.frames) {
+      return {
+        uv: [face.uv[0], face.uv[1]],
+        uv_size: [face.uv[2] - face.uv[0], face.uv[3] - face.uv[1]]
+      };
+    }
+
+    // Find texture in spritesheet
+    const cleanPath = textureRef.replace(/^[^:]+:/, '');
+    let textureData = null;
+    
+    for (const [framePath, data] of Object.entries(this.spritesheetData.frames)) {
+      if (framePath.includes(cleanPath + '.png')) {
+        textureData = data;
+        break;
+      }
+    }
+
     if (!textureData) {
       return {
         uv: [face.uv[0], face.uv[1]],
@@ -72,6 +67,7 @@ class JavaToBedrockConverter {
       };
     }
 
+    // Extract atlas and frame dimensions
     const atlasWidth = this.spritesheetData.meta.size.w;
     const atlasHeight = this.spritesheetData.meta.size.h;
     const frameX = textureData.frame.x;
@@ -79,64 +75,79 @@ class JavaToBedrockConverter {
     const frameW = textureData.frame.w;
     const frameH = textureData.frame.h;
 
-    const u0 = ((face.uv[0] * frameW * 0.0625) + frameX) * (16 / atlasWidth);
-    const v0 = ((face.uv[1] * frameH * 0.0625) + frameY) * (16 / atlasHeight);
-    const u1 = ((face.uv[2] * frameW * 0.0625) + frameX) * (16 / atlasWidth);
-    const v1 = ((face.uv[3] * frameH * 0.0625) + frameY) * (16 / atlasHeight);
+    // Calculate UV in atlas space (exact formula from converter.sh)
+    const fn0 = ((face.uv[0] * frameW * 0.0625) + frameX) * (16 / atlasWidth);
+    const fn1 = ((face.uv[1] * frameH * 0.0625) + frameY) * (16 / atlasHeight);
+    const fn2 = ((face.uv[2] * frameW * 0.0625) + frameX) * (16 / atlasWidth);
+    const fn3 = ((face.uv[3] * frameH * 0.0625) + frameY) * (16 / atlasHeight);
 
-    const xSign = Math.max(-1, Math.min(1, u1 - u0));
-    const ySign = Math.max(-1, Math.min(1, v1 - v0));
+    // Calculate signs for UV adjustment
+    const xSign = Math.max(-1, Math.min(1, fn2 - fn0));
+    const ySign = Math.max(-1, Math.min(1, fn3 - fn1));
+
+    // Round to 4 decimal places
+    const roundit = (val) => Math.round(val * 10000) / 10000;
 
     return {
       uv: [
-        Math.round((u0 + (0.016 * xSign)) * 10000) / 10000,
-        Math.round((v0 + (0.016 * ySign)) * 10000) / 10000
+        roundit(fn0 + (0.016 * xSign)),
+        roundit(fn1 + (0.016 * ySign))
       ],
       uv_size: [
-        Math.round(((u1 - u0) - (0.016 * xSign)) * 10000) / 10000,
-        Math.round(((v1 - v0) - (0.016 * ySign)) * 10000) / 10000
+        roundit((fn2 - fn0) - (0.016 * xSign)),
+        roundit((fn3 - fn1) - (0.016 * ySign))
       ]
     };
   }
 
-  convertElement(element, javaModel, assetsBase) {
+  /**
+   * Convert Java element to Bedrock cube
+   */
+  convertElement(element, javaModel, texturePaths) {
     const from = element.from;
     const to = element.to;
 
+    const roundit = (val) => Math.round(val * 10000) / 10000;
+
+    // Calculate origin and size (exact formula from converter.sh)
     const origin = [
-      Math.round((from[0] - 8) * 10000) / 10000,
-      Math.round(from[1] * 10000) / 10000,
-      Math.round((from[2] - 8) * 10000) / 10000
+      roundit(-to[0] + 8),
+      roundit(from[1]),
+      roundit(from[2] - 8)
     ];
 
     const size = [
-      Math.round((to[0] - from[0]) * 10000) / 10000,
-      Math.round((to[1] - from[1]) * 10000) / 10000,
-      Math.round((to[2] - from[2]) * 10000) / 10000
+      roundit(to[0] - from[0]),
+      roundit(to[1] - from[1]),
+      roundit(to[2] - from[2])
     ];
 
     const cube = { origin, size };
 
+    // Convert UV for each face
     if (element.faces) {
       const uvMap = {};
+      
       for (const [faceName, face] of Object.entries(element.faces)) {
         if (face && face.texture) {
-          const uv = this.calculateUV(face, face.texture, javaModel, assetsBase);
+          const uv = this.calculateUV(face, face.texture, javaModel, texturePaths);
           if (uv) {
             uvMap[faceName] = uv;
           }
         }
       }
+      
       if (Object.keys(uvMap).length > 0) {
         cube.uv = uvMap;
       }
     }
 
+    // Convert rotation (exact formula from converter.sh)
     if (element.rotation) {
       cube.pivot = [
-        Math.round((element.rotation.origin[0] - 8) * 10000) / 10000,
-        Math.round(element.rotation.origin[1] * 10000) / 10000,
-        Math.round((element.rotation.origin[2] - 8) * 10000) / 10000
+        roundit(-element.rotation.origin[0] + 8),
+        roundit(element.rotation.origin[1]),
+        roundit(element.rotation.origin[2] - 8)
       ];
       
       const angle = element.rotation.angle;
@@ -152,31 +163,73 @@ class JavaToBedrockConverter {
     return cube;
   }
 
-  groupCubesByRotation(elements, javaModel, assetsBase) {
-    const cubes = elements.map(el => this.convertElement(el, javaModel, assetsBase));
-    const groups = [];
-    const noPivotCubes = [];
-
-    cubes.forEach(cube => {
-      if (cube.rotation && cube.pivot) {
-        const pivotKey = cube.pivot.join(',') + ':' + cube.rotation.join(',');
-        let group = groups.find(g => g.key === pivotKey);
+  /**
+   * Group cubes by rotation pivot (exact logic from converter.sh)
+   */
+  groupCubesByRotation(elements, javaModel, texturePaths) {
+    const cubes = elements.map(el => this.convertElement(el, javaModel, texturePaths));
+    
+    // Get unique rotations
+    const rotations = [];
+    elements.forEach(el => {
+      if (el.rotation) {
+        const key = JSON.stringify({
+          origin: el.rotation.origin,
+          angle: el.rotation.angle,
+          axis: el.rotation.axis
+        });
         
-        if (!group) {
-          group = {
-            key: pivotKey,
-            pivot: cube.pivot,
-            rotation: cube.rotation,
-            cubes: []
-          };
-          groups.push(group);
+        if (!rotations.find(r => r.key === key)) {
+          rotations.push({
+            key,
+            origin: el.rotation.origin,
+            angle: el.rotation.angle,
+            axis: el.rotation.axis
+          });
         }
-        
-        const cubeWithoutPivot = { ...cube };
-        delete cubeWithoutPivot.pivot;
-        delete cubeWithoutPivot.rotation;
-        group.cubes.push(cubeWithoutPivot);
-      } else {
+      }
+    });
+
+    const roundit = (val) => Math.round(val * 10000) / 10000;
+
+    // Create rotation groups
+    const groups = rotations.map(rot => {
+      const pivot = [
+        roundit(-rot.origin[0] + 8),
+        roundit(rot.origin[1]),
+        roundit(rot.origin[2] - 8)
+      ];
+
+      const rotation = [
+        rot.axis === 'x' ? -rot.angle : 0,
+        rot.axis === 'y' ? -rot.angle : 0,
+        rot.axis === 'z' ? rot.angle : 0
+      ];
+
+      const groupCubes = [];
+      
+      cubes.forEach((cube, idx) => {
+        if (elements[idx].rotation &&
+            JSON.stringify(cube.rotation) === JSON.stringify(rotation) &&
+            JSON.stringify(cube.pivot) === JSON.stringify(pivot)) {
+          const cubeWithoutPivot = { ...cube };
+          delete cubeWithoutPivot.pivot;
+          delete cubeWithoutPivot.rotation;
+          groupCubes.push(cubeWithoutPivot);
+        }
+      });
+
+      return {
+        pivot,
+        rotation,
+        cubes: groupCubes
+      };
+    });
+
+    // Get cubes without rotation
+    const noPivotCubes = [];
+    cubes.forEach((cube, idx) => {
+      if (!elements[idx].rotation) {
         const cubeWithoutPivot = { ...cube };
         delete cubeWithoutPivot.pivot;
         delete cubeWithoutPivot.rotation;
@@ -187,25 +240,50 @@ class JavaToBedrockConverter {
     return { groups, noPivotCubes };
   }
 
-  convert(javaModel, modelName, outputDir, assetsBase) {
+  /**
+   * Convert Java model to Bedrock format
+   */
+  convert(javaModel, modelName, outputDir, assetsDir) {
+    // Extract texture size
     if (javaModel.texture_size) {
       this.textureWidth = javaModel.texture_size[0];
       this.textureHeight = javaModel.texture_size[1];
     }
 
-    this.generateSpritesheet(javaModel, modelName, outputDir);
-
     if (!javaModel.elements || javaModel.elements.length === 0) {
       throw new Error('No elements found in model');
     }
 
-    const { groups, noPivotCubes } = this.groupCubesByRotation(javaModel.elements, javaModel, assetsBase);
+    // Collect texture paths for spritesheet
+    const texturePaths = [];
+    if (javaModel.textures) {
+      for (const [key, value] of Object.entries(javaModel.textures)) {
+        const cleanPath = value.replace(/^[^:]+:/, '');
+        const texturePath = path.join(assetsDir, 'textures', cleanPath + '.png');
+        if (fs.existsSync(texturePath)) {
+          texturePaths.push(texturePath);
+        }
+      }
+    }
 
+    // Generate spritesheet
+    if (texturePaths.length > 0) {
+      this.generateSpritesheet(texturePaths, modelName, outputDir);
+    }
+
+    // Group cubes by rotation
+    const { groups, noPivotCubes } = this.groupCubesByRotation(
+      javaModel.elements,
+      javaModel,
+      texturePaths
+    );
+
+    // Build bone structure (exact structure from converter.sh)
     const bones = [
       {
         name: "campfire",
-        pivot: [0, 8, 0],
-        binding: "c.item_slot == 'head' ? 'head' : q.item_slot_to_bone_name(c.item_slot)"
+        binding: "c.item_slot == 'head' ? 'head' : q.item_slot_to_bone_name(c.item_slot)",
+        pivot: [0, 8, 0]
       },
       {
         name: "campfire_x",
@@ -225,6 +303,7 @@ class JavaToBedrockConverter {
       }
     ];
 
+    // Add rotation groups as bones
     groups.forEach((group, index) => {
       bones.push({
         name: `rot_${index + 1}`,
@@ -254,6 +333,7 @@ class JavaToBedrockConverter {
   }
 }
 
+// Main function
 async function main() {
   const args = process.argv.slice(2);
   const inputPack = args[0];
@@ -262,11 +342,9 @@ async function main() {
   if (!inputPack) {
     console.log('Usage: node converter.js <input_pack_dir> [output_dir]');
     console.log('');
-    console.log('Converts all Java models from assets folder to Bedrock format');
-    console.log('');
     console.log('Examples:');
-    console.log('  node converter.js ../lunarset');
-    console.log('  node converter.js ../my_pack ../output');
+    console.log('  node converter.js ..');
+    console.log('  node converter.js .. ../output');
     process.exit(1);
   }
   
@@ -277,6 +355,7 @@ async function main() {
     process.exit(1);
   }
   
+  // Find all model files recursively
   function findModelFiles(dir, fileList = []) {
     const files = fs.readdirSync(dir);
     
@@ -298,7 +377,7 @@ async function main() {
   const modelFiles = findModelFiles(assetsDir);
   
   if (modelFiles.length === 0) {
-    console.error('❌ No model files found in assets');
+    console.error('❌ No model files found');
     process.exit(1);
   }
   
@@ -312,7 +391,6 @@ async function main() {
   let failCount = 0;
   let skippedCount = 0;
   const failedModels = [];
-  const skippedModels = [];
   
   for (const filePath of modelFiles) {
     const relativePath = path.relative(assetsDir, filePath);
@@ -331,7 +409,6 @@ async function main() {
       if (!javaModel.elements || javaModel.elements.length === 0) {
         console.log(`⏭️  Skipped (no elements)\n`);
         skippedCount++;
-        skippedModels.push({ name: modelName, reason: 'No elements' });
         continue;
       }
       
@@ -340,9 +417,9 @@ async function main() {
         fs.mkdirSync(namespaceOutputDir, { recursive: true });
       }
       
-      const assetsBase = path.join(assetsDir, namespace);
+      const namespaceAssetsDir = path.join(assetsDir, namespace);
       const converter = new JavaToBedrockConverter();
-      const bedrockModel = converter.convert(javaModel, modelName, namespaceOutputDir, assetsBase);
+      const bedrockModel = converter.convert(javaModel, modelName, namespaceOutputDir, namespaceAssetsDir);
       
       const outputPath = path.join(namespaceOutputDir, `${fileName}.json`);
       fs.writeFileSync(outputPath, JSON.stringify(bedrockModel, null, 2));
@@ -363,22 +440,12 @@ async function main() {
   console.log(`✅ Successful: ${successCount}`);
   console.log(`⏭️  Skipped: ${skippedCount}`);
   console.log(`❌ Failed: ${failCount}`);
-  console.log(`📁 Output directory: ${outputDir}`);
-  
-  if (skippedModels.length > 0 && skippedModels.length <= 10) {
-    console.log('\n⏭️  Skipped models:');
-    skippedModels.forEach(({ name, reason }) => {
-      console.log(`  - ${name}: ${reason}`);
-    });
-  } else if (skippedModels.length > 10) {
-    console.log(`\n⏭️  ${skippedModels.length} models skipped (no elements)`);
-  }
+  console.log(`📁 Output: ${outputDir}`);
   
   if (failedModels.length > 0) {
     console.log('\n❌ Failed models:');
     failedModels.forEach(({ path, error }) => {
-      console.log(`  - ${path}`);
-      console.log(`    Error: ${error}`);
+      console.log(`  - ${path}: ${error}`);
     });
   }
   
