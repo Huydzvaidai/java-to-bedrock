@@ -1,0 +1,36 @@
+name: Java to Bedrock Model Converter
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_name:
+        description: 'Model name (e.g., sword, axe, bow)'
+        required: true
+        type: string
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Convert model
+        run: |
+          mkdir -p output
+          cd geometry
+          node converter.js "${{ inputs.model_name }}" ../output
+      
+      - name: Show result
+        run: cat output/${{ inputs.model_name }}_bedrock.json
+      
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-model-${{ inputs.model_name }}
+          path: output/${{ inputs.model_name }}_bedrock.json

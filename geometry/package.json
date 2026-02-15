@@ -1,0 +1,17 @@
+{
+  "name": "java-to-bedrock-converter",
+  "version": "1.0.0",
+  "description": "Convert Java Edition models to Bedrock Edition format",
+  "main": "converter.js",
+  "scripts": {
+    "convert": "node converter.js"
+  },
+  "keywords": [
+    "minecraft",
+    "bedrock",
+    "java",
+    "converter"
+  ],
+  "author": "",
+  "license": "MIT"
+}
