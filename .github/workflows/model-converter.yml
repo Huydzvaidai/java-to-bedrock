@@ -18,6 +18,11 @@ jobs:
         with:
           node-version: '20'
       
+      - name: Install ImageMagick
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y imagemagick
+      
       - name: Install spritesheet-js
         run: npm install -g spritesheet-js
       
