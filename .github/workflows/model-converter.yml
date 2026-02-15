@@ -35,4 +35,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bedrock-models-all
-          path: output/**/*.json
+          path: |
+            output/**/*.json
+            output/**/*.png

@@ -83,7 +83,7 @@ class JavaToBedrockConverter {
       const spritesheetPath = path.join(outputDir, outputName);
       const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --fullpath ${processedPaths.map(p => `"${p}"`).join(' ')}`;
       
-      execSync(cmd, { stdio: 'pipe' });
+      execSync(cmd, { stdio: 'inherit' });
       
       // Clean up cropped temp files
       processedPaths.forEach(p => {
@@ -93,10 +93,18 @@ class JavaToBedrockConverter {
       });
       
       const jsonPath = `${spritesheetPath}.json`;
-      if (fs.existsSync(jsonPath)) {
+      const pngPath = `${spritesheetPath}.png`;
+      
+      if (fs.existsSync(jsonPath) && fs.existsSync(pngPath)) {
         this.spritesheetData = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
         console.log(`  ✅ Generated spritesheet: ${outputName}.png (${this.spritesheetData.meta.size.w}x${this.spritesheetData.meta.size.h})`);
+        
+        // Clean up the JSON metadata file
+        try { fs.unlinkSync(jsonPath); } catch (e) {}
+        
         return `${outputName}.png`;
+      } else {
+        console.warn(`  ⚠️  Spritesheet files not created`);
       }
     } catch (error) {
       console.warn(`  ⚠️  Spritesheet generation failed: ${error.message}`);
