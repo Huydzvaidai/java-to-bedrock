@@ -23,12 +23,11 @@ jobs:
       
       - name: Convert all models
         run: |
-          mkdir -p output
           cd geometry
-          node converter.js ../output
+          node converter.js ../lunarset ../output
       
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: bedrock-models-all
-          path: output/*.json
+          path: output/**/*.json
