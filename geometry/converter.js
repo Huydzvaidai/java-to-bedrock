@@ -10,24 +10,96 @@ class JavaToBedrockConverter {
   }
 
   /**
-   * Generate spritesheet from textures using spritesheet-js
+   * Collect all unique texture paths from model
    */
-  generateSpritesheet(texturePaths, outputName, outputDir) {
-    if (texturePaths.length === 0) return null;
+  collectTexturePaths(javaModel, assetsDir) {
+    const texturePaths = [];
+    const seen = new Set();
+    
+    if (!javaModel.textures) return texturePaths;
+    
+    for (const [key, value] of Object.entries(javaModel.textures)) {
+      const cleanPath = value.replace(/^[^:]+:/, '');
+      const texturePath = path.join(assetsDir, 'textures', cleanPath + '.png');
+      
+      if (!seen.has(texturePath) && fs.existsSync(texturePath)) {
+        texturePaths.push(texturePath);
+        seen.add(texturePath);
+      }
+    }
+    
+    return texturePaths;
+  }
+
+  /**
+   * Crop animated textures to first frame
+   */
+  cropAnimatedTextures(texturePaths) {
+    const croppedPaths = [];
+    
+    for (const texturePath of texturePaths) {
+      const mcmetaPath = texturePath + '.mcmeta';
+      
+      // Check if this is an animated texture
+      if (fs.existsSync(mcmetaPath)) {
+        try {
+          // Use ImageMagick to crop to square (first frame)
+          const tempPath = texturePath.replace('.png', '_cropped.png');
+          execSync(`convert "${texturePath}" -set option:distort:viewport "%[fx:min(w,h)]x%[fx:min(w,h)]" -distort affine "0,0 0,0" -define png:format=png8 -clamp "${tempPath}"`, {
+            stdio: 'pipe'
+          });
+          croppedPaths.push(tempPath);
+          console.log(`  🎞️  Cropped animated texture: ${path.basename(texturePath)}`);
+        } catch (error) {
+          console.warn(`  ⚠️  Failed to crop ${path.basename(texturePath)}, using original`);
+          croppedPaths.push(texturePath);
+        }
+      } else {
+        croppedPaths.push(texturePath);
+      }
+    }
+    
+    return croppedPaths;
+  }
+
+  /**
+   * Generate spritesheet from all textures in model
+   */
+  generateSpritesheet(javaModel, outputName, outputDir, assetsDir) {
+    // Collect all texture paths from model
+    const texturePaths = this.collectTexturePaths(javaModel, assetsDir);
+    
+    if (texturePaths.length === 0) {
+      console.log(`  ⚠️  No textures found`);
+      return null;
+    }
+
+    console.log(`  📦 Found ${texturePaths.length} texture(s) to atlas`);
+
+    // Crop animated textures first
+    const processedPaths = this.cropAnimatedTextures(texturePaths);
 
     try {
       const spritesheetPath = path.join(outputDir, outputName);
-      const cmd = `spritesheet-js -f json --name ${spritesheetPath} --fullpath ${texturePaths.join(' ')}`;
+      const cmd = `spritesheet-js -f json --name "${spritesheetPath}" --fullpath ${processedPaths.map(p => `"${p}"`).join(' ')}`;
       
       execSync(cmd, { stdio: 'pipe' });
+      
+      // Clean up cropped temp files
+      processedPaths.forEach(p => {
+        if (p.includes('_cropped.png')) {
+          try { fs.unlinkSync(p); } catch (e) {}
+        }
+      });
       
       const jsonPath = `${spritesheetPath}.json`;
       if (fs.existsSync(jsonPath)) {
         this.spritesheetData = JSON.parse(fs.readFileSync(jsonPath, 'utf-8'));
+        console.log(`  ✅ Generated spritesheet: ${outputName}.png (${this.spritesheetData.meta.size.w}x${this.spritesheetData.meta.size.h})`);
         return `${outputName}.png`;
       }
     } catch (error) {
-      console.warn(`⚠️  Spritesheet generation failed: ${error.message}`);
+      console.warn(`  ⚠️  Spritesheet generation failed: ${error.message}`);
     }
     return null;
   }
@@ -35,7 +107,7 @@ class JavaToBedrockConverter {
   /**
    * Calculate UV coordinates in atlas space (exact formula from converter.sh)
    */
-  calculateUV(face, textureKey, javaModel, texturePaths) {
+  calculateUV(face, textureKey, javaModel) {
     if (!face || !face.uv) return null;
 
     const textureRef = javaModel.textures[textureKey.substring(1)];
@@ -49,12 +121,12 @@ class JavaToBedrockConverter {
       };
     }
 
-    // Find texture in spritesheet
+    // Find texture in spritesheet by matching path
     const cleanPath = textureRef.replace(/^[^:]+:/, '');
     let textureData = null;
     
     for (const [framePath, data] of Object.entries(this.spritesheetData.frames)) {
-      if (framePath.includes(cleanPath + '.png')) {
+      if (framePath.includes(cleanPath + '.png') || framePath.includes(cleanPath + '_cropped.png')) {
         textureData = data;
         break;
       }
@@ -103,7 +175,7 @@ class JavaToBedrockConverter {
   /**
    * Convert Java element to Bedrock cube
    */
-  convertElement(element, javaModel, texturePaths) {
+  convertElement(element, javaModel) {
     const from = element.from;
     const to = element.to;
 
@@ -130,7 +202,7 @@ class JavaToBedrockConverter {
       
       for (const [faceName, face] of Object.entries(element.faces)) {
         if (face && face.texture) {
-          const uv = this.calculateUV(face, face.texture, javaModel, texturePaths);
+          const uv = this.calculateUV(face, face.texture, javaModel);
           if (uv) {
             uvMap[faceName] = uv;
           }
@@ -166,8 +238,8 @@ class JavaToBedrockConverter {
   /**
    * Group cubes by rotation pivot (exact logic from converter.sh)
    */
-  groupCubesByRotation(elements, javaModel, texturePaths) {
-    const cubes = elements.map(el => this.convertElement(el, javaModel, texturePaths));
+  groupCubesByRotation(elements, javaModel) {
+    const cubes = elements.map(el => this.convertElement(el, javaModel));
     
     // Get unique rotations
     const rotations = [];
@@ -254,28 +326,13 @@ class JavaToBedrockConverter {
       throw new Error('No elements found in model');
     }
 
-    // Collect texture paths for spritesheet
-    const texturePaths = [];
-    if (javaModel.textures) {
-      for (const [key, value] of Object.entries(javaModel.textures)) {
-        const cleanPath = value.replace(/^[^:]+:/, '');
-        const texturePath = path.join(assetsDir, 'textures', cleanPath + '.png');
-        if (fs.existsSync(texturePath)) {
-          texturePaths.push(texturePath);
-        }
-      }
-    }
-
-    // Generate spritesheet
-    if (texturePaths.length > 0) {
-      this.generateSpritesheet(texturePaths, modelName, outputDir);
-    }
+    // Generate spritesheet from ALL textures in model
+    this.generateSpritesheet(javaModel, modelName, outputDir, assetsDir);
 
     // Group cubes by rotation
     const { groups, noPivotCubes } = this.groupCubesByRotation(
       javaModel.elements,
-      javaModel,
-      texturePaths
+      javaModel
     );
 
     // Build bone structure (exact structure from converter.sh)
