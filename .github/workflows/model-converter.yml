@@ -2,16 +2,14 @@ name: Java to Bedrock Model Converter
 
 on:
   workflow_dispatch:
-    inputs:
-      model_name:
-        description: 'Model name (e.g., sword, axe, bow)'
-        required: true
-        type: string
+  push:
+    paths:
+      - 'lunarset/models/**'
 
 jobs:
   convert:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     
     steps:
       - uses: actions/checkout@v4
@@ -20,17 +18,17 @@ jobs:
         with:
           node-version: '20'
       
-      - name: Convert model
+      - name: Install spritesheet-js
+        run: npm install -g spritesheet-js
+      
+      - name: Convert all models
         run: |
           mkdir -p output
           cd geometry
-          node converter.js "${{ inputs.model_name }}" ../output
+          node converter.js ../output
       
-      - name: Show result
-        run: cat output/${{ inputs.model_name }}_bedrock.json
-      
-      - name: Upload result
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: bedrock-model-${{ inputs.model_name }}
-          path: output/${{ inputs.model_name }}_bedrock.json
+          name: bedrock-models-all
+          path: output/*.json

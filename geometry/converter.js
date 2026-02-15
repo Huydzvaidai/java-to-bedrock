@@ -9,20 +9,17 @@ class JavaToBedrockConverter {
     this.spritesheetData = null;
   }
 
-  /**
-   * Generate spritesheet from model textures
-   */
   generateSpritesheet(javaModel, modelName, outputDir) {
     const texturesDir = path.join(outputDir, 'textures_temp');
     if (!fs.existsSync(texturesDir)) {
       fs.mkdirSync(texturesDir, { recursive: true });
     }
 
-    // Extract texture paths from model
     const texturePaths = [];
     if (javaModel.textures) {
       for (const [key, value] of Object.entries(javaModel.textures)) {
-        const texturePath = path.join(__dirname, '../lunarset/textures', value.replace('lunarset:', '') + '.png');
+        const cleanPath = value.replace(/^[^:]+:/, '');
+        const texturePath = path.join(path.dirname(outputDir), 'textures', cleanPath + '.png');
         if (fs.existsSync(texturePath)) {
           texturePaths.push(texturePath);
         }
@@ -30,54 +27,45 @@ class JavaToBedrockConverter {
     }
 
     if (texturePaths.length === 0) {
-      console.log('⚠️  No textures found, using fallback');
       return null;
     }
 
-    // Generate spritesheet using spritesheet-js
     const spritesheetPath = path.join(outputDir, modelName);
     try {
       execSync(`spritesheet-js -f json --name ${spritesheetPath} --fullpath ${texturePaths.join(' ')}`, {
-        stdio: 'inherit'
+        stdio: 'pipe'
       });
       
-      // Read generated spritesheet data
       const spritesheetJsonPath = `${spritesheetPath}.json`;
       if (fs.existsSync(spritesheetJsonPath)) {
         this.spritesheetData = JSON.parse(fs.readFileSync(spritesheetJsonPath, 'utf-8'));
         return `${modelName}.png`;
       }
     } catch (error) {
-      console.error('Failed to generate spritesheet:', error.message);
+      // Silently fail spritesheet generation
     }
 
     return null;
   }
 
-  /**
-   * Get texture data from spritesheet
-   */
-  getTextureData(texturePath) {
+  getTextureData(texturePath, assetsBase) {
     if (!this.spritesheetData || !this.spritesheetData.frames) {
       return null;
     }
 
-    const fullPath = path.join(__dirname, '../lunarset/textures', texturePath.replace('lunarset:', '') + '.png');
+    const cleanPath = texturePath.replace(/^[^:]+:/, '');
+    const fullPath = path.join(assetsBase, 'textures', cleanPath + '.png');
     return this.spritesheetData.frames[fullPath];
   }
 
-  /**
-   * Calculate UV from spritesheet
-   */
-  calculateUV(face, textureKey, javaModel) {
+  calculateUV(face, textureKey, javaModel, assetsBase) {
     if (!face || !face.uv) return null;
 
     const texturePath = javaModel.textures[textureKey.substring(1)];
     if (!texturePath) return null;
 
-    const textureData = this.getTextureData(texturePath);
+    const textureData = this.getTextureData(texturePath, assetsBase);
     if (!textureData) {
-      // Fallback to simple UV if no spritesheet
       return {
         uv: [face.uv[0], face.uv[1]],
         uv_size: [face.uv[2] - face.uv[0], face.uv[3] - face.uv[1]]
@@ -91,7 +79,6 @@ class JavaToBedrockConverter {
     const frameW = textureData.frame.w;
     const frameH = textureData.frame.h;
 
-    // Calculate UV coordinates in atlas space
     const u0 = ((face.uv[0] * frameW * 0.0625) + frameX) * (16 / atlasWidth);
     const v0 = ((face.uv[1] * frameH * 0.0625) + frameY) * (16 / atlasHeight);
     const u1 = ((face.uv[2] * frameW * 0.0625) + frameX) * (16 / atlasWidth);
@@ -112,10 +99,7 @@ class JavaToBedrockConverter {
     };
   }
 
-  /**
-   * Convert Java element to Bedrock cube
-   */
-  convertElement(element, javaModel) {
+  convertElement(element, javaModel, assetsBase) {
     const from = element.from;
     const to = element.to;
 
@@ -131,17 +115,13 @@ class JavaToBedrockConverter {
       Math.round((to[2] - from[2]) * 10000) / 10000
     ];
 
-    const cube = {
-      origin,
-      size
-    };
+    const cube = { origin, size };
 
-    // Convert UV mapping
     if (element.faces) {
       const uvMap = {};
       for (const [faceName, face] of Object.entries(element.faces)) {
         if (face && face.texture) {
-          const uv = this.calculateUV(face, face.texture, javaModel);
+          const uv = this.calculateUV(face, face.texture, javaModel, assetsBase);
           if (uv) {
             uvMap[faceName] = uv;
           }
@@ -152,7 +132,6 @@ class JavaToBedrockConverter {
       }
     }
 
-    // Convert rotation
     if (element.rotation) {
       cube.pivot = [
         Math.round((element.rotation.origin[0] - 8) * 10000) / 10000,
@@ -173,11 +152,8 @@ class JavaToBedrockConverter {
     return cube;
   }
 
-  /**
-   * Group cubes by rotation pivot
-   */
-  groupCubesByRotation(elements, javaModel) {
-    const cubes = elements.map(el => this.convertElement(el, javaModel));
+  groupCubesByRotation(elements, javaModel, assetsBase) {
+    const cubes = elements.map(el => this.convertElement(el, javaModel, assetsBase));
     const groups = [];
     const noPivotCubes = [];
 
@@ -211,26 +187,20 @@ class JavaToBedrockConverter {
     return { groups, noPivotCubes };
   }
 
-  /**
-   * Convert Java model to Bedrock format
-   */
-  convert(javaModel, modelName, outputDir) {
+  convert(javaModel, modelName, outputDir, assetsBase) {
     if (javaModel.texture_size) {
       this.textureWidth = javaModel.texture_size[0];
       this.textureHeight = javaModel.texture_size[1];
     }
 
-    // Generate spritesheet
-    const spritesheetFile = this.generateSpritesheet(javaModel, modelName, outputDir);
+    this.generateSpritesheet(javaModel, modelName, outputDir);
 
     if (!javaModel.elements || javaModel.elements.length === 0) {
       throw new Error('No elements found in model');
     }
 
-    // Group cubes by rotation
-    const { groups, noPivotCubes } = this.groupCubesByRotation(javaModel.elements, javaModel);
+    const { groups, noPivotCubes } = this.groupCubesByRotation(javaModel.elements, javaModel, assetsBase);
 
-    // Build bones structure
     const bones = [
       {
         name: "campfire",
@@ -255,7 +225,6 @@ class JavaToBedrockConverter {
       }
     ];
 
-    // Add rotation groups as bones
     groups.forEach((group, index) => {
       bones.push({
         name: `rot_${index + 1}`,
@@ -285,67 +254,135 @@ class JavaToBedrockConverter {
   }
 }
 
-// Main function
 async function main() {
   const args = process.argv.slice(2);
-  
-  if (args.length < 1) {
-    console.log('Usage: node converter.js <model_name> [output_dir]');
-    console.log('');
-    console.log('Converts Java model from ../lunarset/models/<model_name>.json to Bedrock format');
-    console.log('');
-    console.log('Examples:');
-    console.log('  node converter.js sword');
-    console.log('  node converter.js axe ../output');
-    console.log('');
-    console.log('Available models:');
-    const modelsDir = path.join(__dirname, '../lunarset/models');
-    if (fs.existsSync(modelsDir)) {
-      const files = fs.readdirSync(modelsDir).filter(f => f.endsWith('.json'));
-      files.forEach(f => console.log(`  - ${f.replace('.json', '')}`));
-    }
-    process.exit(1);
-  }
-  
-  const modelName = args[0];
+  const inputPack = args[0];
   const outputDir = args[1] || path.join(__dirname, '../output');
   
-  const inputPath = path.join(__dirname, '../lunarset/models', `${modelName}.json`);
-  
-  if (!fs.existsSync(inputPath)) {
-    console.error(`❌ Model not found: ${inputPath}`);
-    console.log('\nAvailable models:');
-    const modelsDir = path.join(__dirname, '../lunarset/models');
-    if (fs.existsSync(modelsDir)) {
-      const files = fs.readdirSync(modelsDir).filter(f => f.endsWith('.json'));
-      files.forEach(f => console.log(`  - ${f.replace('.json', '')}`));
-    }
+  if (!inputPack) {
+    console.log('Usage: node converter.js <input_pack_dir> [output_dir]');
+    console.log('');
+    console.log('Converts all Java models from assets folder to Bedrock format');
+    console.log('');
+    console.log('Examples:');
+    console.log('  node converter.js ../lunarset');
+    console.log('  node converter.js ../my_pack ../output');
     process.exit(1);
   }
   
-  try {
-    console.log(`📥 Reading ${modelName}.json...`);
-    const javaModelJson = fs.readFileSync(inputPath, 'utf-8');
-    const javaModel = JSON.parse(javaModelJson);
-    
-    console.log(`🔄 Converting to Bedrock format...`);
-    const converter = new JavaToBedrockConverter();
-    const bedrockModel = converter.convert(javaModel, modelName, outputDir);
-    
-    if (!fs.existsSync(outputDir)) {
-      fs.mkdirSync(outputDir, { recursive: true });
-    }
-    
-    const outputPath = path.join(outputDir, `${modelName}_bedrock.json`);
-    fs.writeFileSync(outputPath, JSON.stringify(bedrockModel, null, 2));
-    
-    console.log(`✅ Conversion successful!`);
-    console.log(`📄 Output: ${outputPath}`);
-    
-  } catch (error) {
-    console.error('❌ Error:', error.message);
+  const assetsDir = path.join(inputPack, 'assets');
+  
+  if (!fs.existsSync(assetsDir)) {
+    console.error(`❌ Assets directory not found: ${assetsDir}`);
     process.exit(1);
   }
+  
+  function findModelFiles(dir, fileList = []) {
+    const files = fs.readdirSync(dir);
+    
+    files.forEach(file => {
+      const filePath = path.join(dir, file);
+      const stat = fs.statSync(filePath);
+      
+      if (stat.isDirectory()) {
+        findModelFiles(filePath, fileList);
+      } else if (file.endsWith('.json') && filePath.includes('/models/')) {
+        fileList.push(filePath);
+      }
+    });
+    
+    return fileList;
+  }
+  
+  console.log(`🔍 Scanning for models in ${assetsDir}...\n`);
+  const modelFiles = findModelFiles(assetsDir);
+  
+  if (modelFiles.length === 0) {
+    console.error('❌ No model files found in assets');
+    process.exit(1);
+  }
+  
+  console.log(`📦 Found ${modelFiles.length} model files\n`);
+  
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+  
+  let successCount = 0;
+  let failCount = 0;
+  let skippedCount = 0;
+  const failedModels = [];
+  const skippedModels = [];
+  
+  for (const filePath of modelFiles) {
+    const relativePath = path.relative(assetsDir, filePath);
+    const parts = relativePath.split(path.sep);
+    const namespace = parts[0];
+    const modelPath = parts.slice(2, -1).join('/');
+    const fileName = path.basename(filePath, '.json');
+    const modelName = `${namespace}_${modelPath ? modelPath + '_' : ''}${fileName}`.replace(/\//g, '_');
+    
+    try {
+      console.log(`📥 [${successCount + failCount + skippedCount + 1}/${modelFiles.length}] ${namespace}/${modelPath}/${fileName}`);
+      
+      const javaModelJson = fs.readFileSync(filePath, 'utf-8');
+      const javaModel = JSON.parse(javaModelJson);
+      
+      if (!javaModel.elements || javaModel.elements.length === 0) {
+        console.log(`⏭️  Skipped (no elements)\n`);
+        skippedCount++;
+        skippedModels.push({ name: modelName, reason: 'No elements' });
+        continue;
+      }
+      
+      const namespaceOutputDir = path.join(outputDir, namespace, modelPath || '');
+      if (!fs.existsSync(namespaceOutputDir)) {
+        fs.mkdirSync(namespaceOutputDir, { recursive: true });
+      }
+      
+      const assetsBase = path.join(assetsDir, namespace);
+      const converter = new JavaToBedrockConverter();
+      const bedrockModel = converter.convert(javaModel, modelName, namespaceOutputDir, assetsBase);
+      
+      const outputPath = path.join(namespaceOutputDir, `${fileName}.json`);
+      fs.writeFileSync(outputPath, JSON.stringify(bedrockModel, null, 2));
+      
+      console.log(`✅ Converted → ${path.relative(outputDir, outputPath)}\n`);
+      successCount++;
+      
+    } catch (error) {
+      console.error(`❌ Failed: ${error.message}\n`);
+      failCount++;
+      failedModels.push({ name: modelName, path: relativePath, error: error.message });
+    }
+  }
+  
+  console.log('\n' + '='.repeat(60));
+  console.log('📊 Conversion Summary');
+  console.log('='.repeat(60));
+  console.log(`✅ Successful: ${successCount}`);
+  console.log(`⏭️  Skipped: ${skippedCount}`);
+  console.log(`❌ Failed: ${failCount}`);
+  console.log(`📁 Output directory: ${outputDir}`);
+  
+  if (skippedModels.length > 0 && skippedModels.length <= 10) {
+    console.log('\n⏭️  Skipped models:');
+    skippedModels.forEach(({ name, reason }) => {
+      console.log(`  - ${name}: ${reason}`);
+    });
+  } else if (skippedModels.length > 10) {
+    console.log(`\n⏭️  ${skippedModels.length} models skipped (no elements)`);
+  }
+  
+  if (failedModels.length > 0) {
+    console.log('\n❌ Failed models:');
+    failedModels.forEach(({ path, error }) => {
+      console.log(`  - ${path}`);
+      console.log(`    Error: ${error}`);
+    });
+  }
+  
+  console.log('\n✨ Done!');
 }
 
 if (require.main === module) {
