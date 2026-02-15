@@ -167,20 +167,47 @@ class JavaToBedrockConverter {
   }
 
   /**
-   * Group cubes by rotation pivot (simplified - all in one bone)
+   * Group cubes by rotation pivot (like converter.sh)
+   * Creates multiple rot_ bones for cubes with same rotation
    */
   groupCubesByRotation(elements, javaModel) {
     const cubes = elements.map(el => this.convertElement(el, javaModel));
     
-    // Add pivot and rotation info to each cube
-    cubes.forEach((cube, idx) => {
-      if (elements[idx].rotation) {
-        // Keep pivot and rotation in the cube itself
-        // They will be preserved when added to camfire_item
+    // Separate cubes with no rotation
+    const cubesWithoutRotation = cubes.filter(cube => !cube.rotation);
+    
+    // Group cubes by rotation pivot and angle
+    const rotationGroups = new Map();
+    
+    cubes.forEach(cube => {
+      if (cube.rotation) {
+        // Create a key from pivot and rotation
+        const key = JSON.stringify({
+          pivot: cube.pivot,
+          rotation: cube.rotation
+        });
+        
+        if (!rotationGroups.has(key)) {
+          rotationGroups.set(key, {
+            pivot: cube.pivot,
+            rotation: cube.rotation,
+            cubes: []
+          });
+        }
+        
+        // Remove pivot and rotation from cube (will be in bone instead)
+        const cubeWithoutRotation = { ...cube };
+        delete cubeWithoutRotation.pivot;
+        delete cubeWithoutRotation.rotation;
+        
+        rotationGroups.get(key).cubes.push(cubeWithoutRotation);
       }
     });
-
-    return { allCubes: cubes };
+    
+    return {
+      cubesWithoutRotation,
+      rotationGroups: Array.from(rotationGroups.values())
+    };
   }
 
   /**
@@ -199,13 +226,13 @@ class JavaToBedrockConverter {
     // Note: spritesheet is already generated at namespace level
     // this.spritesheetData should already be set
 
-    // Group all cubes into one bone
-    const { allCubes } = this.groupCubesByRotation(
+    // Group cubes by rotation (creates multiple rot_ bones like converter.sh)
+    const { cubesWithoutRotation, rotationGroups } = this.groupCubesByRotation(
       javaModel.elements,
       javaModel
     );
 
-    // Build bone structure with single camfire_item bone
+    // Build bone structure with multiple rot_ bones
     const bones = [
       {
         name: "campfire",
@@ -225,15 +252,21 @@ class JavaToBedrockConverter {
       {
         name: "campfire_z",
         parent: "campfire_y",
-        pivot: [0, 8, 0]
-      },
-      {
-        name: "camfire_item",
-        parent: "campfire_z",
         pivot: [0, 8, 0],
-        cubes: allCubes
+        cubes: cubesWithoutRotation
       }
     ];
+    
+    // Add rot_ bones for each rotation group
+    rotationGroups.forEach((group, index) => {
+      bones.push({
+        name: `rot_${index + 1}`,
+        parent: "campfire_z",
+        pivot: group.pivot,
+        rotation: group.rotation,
+        cubes: group.cubes
+      });
+    });
 
     return {
       format_version: "1.21.0",
