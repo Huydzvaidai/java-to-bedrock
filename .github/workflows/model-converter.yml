@@ -24,7 +24,7 @@ jobs:
       - name: Convert all models
         run: |
           cd geometry
-          node converter.js ../lunarset ../output
+          node converter.js .. ../output
       
       - name: Upload results
         uses: actions/upload-artifact@v4
