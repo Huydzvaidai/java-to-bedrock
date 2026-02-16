@@ -10,102 +10,89 @@ class JavaToBedrockConverter {
   }
 
   /**
-   * Calculate UV coordinates in atlas space (exact formula from converter.sh)
+   * Calculate UV coordinates for Bedrock
+   * NEW FORMULA: Based on Blockbench's actual UV mapping behavior
+   * 
+   * Key insights:
+   * 1. Java UV is in pixel coordinates [x1, y1, x2, y2]
+   * 2. Bedrock UV needs {uv: [x, y], uv_size: [width, height]}
+   * 3. Face rotation affects UV orientation
    */
-  calculateUV(face, textureKey, javaModel) {
+  calculateUV(face, textureKey, javaModel, faceName) {
     if (!face || !face.uv) return null;
 
     // Resolve texture reference (e.g., "#1" -> "shine_oni:texture")
     const textureRef = javaModel.textures[textureKey.substring(1)];
     if (!textureRef) return null;
 
-    // If no spritesheet, use simple UV
-    if (!this.spritesheetData || !this.spritesheetData.frames) {
-      return {
-        uv: [face.uv[0], face.uv[1]],
-        uv_size: [face.uv[2] - face.uv[0], face.uv[3] - face.uv[1]]
-      };
-    }
-
-    // Clean the texture path (remove namespace prefix)
-    const cleanPath = textureRef.replace(/^[^:]+:/, '').replace(/\\/g, '/');
-    let textureData = null;
-    
-    // Try to find texture in spritesheet frames
-    // The spritesheet keys are full file paths, so we need to match them
-    for (const [framePath, data] of Object.entries(this.spritesheetData.frames)) {
-      const normalizedFramePath = framePath.replace(/\\/g, '/');
-      
-      // Try multiple matching strategies:
-      // 1. Full path match with .png
-      // 2. Full path match with _cropped.png
-      // 3. Ends with the texture path
-      // 4. Contains the texture filename
-      if (normalizedFramePath.includes('/' + cleanPath + '.png') || 
-          normalizedFramePath.includes('/' + cleanPath + '_cropped.png') ||
-          normalizedFramePath.endsWith(cleanPath + '.png') ||
-          normalizedFramePath.endsWith(cleanPath + '_cropped.png')) {
-        textureData = data;
-        break;
-      }
-    }
-
-    // Fallback: try matching just the filename
-    if (!textureData) {
-      const filename = cleanPath.split('/').pop();
-      for (const [framePath, data] of Object.entries(this.spritesheetData.frames)) {
-        const frameFilename = framePath.split(/[/\\]/).pop().replace('_cropped.png', '.png');
-        if (frameFilename === filename + '.png') {
-          textureData = data;
-          break;
-        }
-      }
-    }
-
-    if (!textureData) {
-      // If texture not found in atlas, return simple UV
-      return {
-        uv: [face.uv[0], face.uv[1]],
-        uv_size: [face.uv[2] - face.uv[0], face.uv[3] - face.uv[1]]
-      };
-    }
-
-    // Extract atlas and frame dimensions
-    const atlasWidth = this.spritesheetData.meta.size.w;
-    const atlasHeight = this.spritesheetData.meta.size.h;
-    const frameX = textureData.frame.x;
-    const frameY = textureData.frame.y;
-    const frameW = textureData.frame.w;
-    const frameH = textureData.frame.h;
-
-    // Calculate UV in atlas space (exact formula from converter.sh)
-    const fn0 = ((face.uv[0] * frameW * 0.0625) + frameX) * (16 / atlasWidth);
-    const fn1 = ((face.uv[1] * frameH * 0.0625) + frameY) * (16 / atlasHeight);
-    const fn2 = ((face.uv[2] * frameW * 0.0625) + frameX) * (16 / atlasWidth);
-    const fn3 = ((face.uv[3] * frameH * 0.0625) + frameY) * (16 / atlasHeight);
-
-    // Calculate signs for UV adjustment
-    const xSign = Math.max(-1, Math.min(1, fn2 - fn0));
-    const ySign = Math.max(-1, Math.min(1, fn3 - fn1));
-
     // Round to 4 decimal places
     const roundit = (val) => Math.round(val * 10000) / 10000;
 
+    // Get Java UV coordinates (in pixels, 0-16 range)
+    const uv0 = face.uv[0];
+    const uv1 = face.uv[1];
+    const uv2 = face.uv[2];
+    const uv3 = face.uv[3];
+
+    // Check if face has rotation
+    const rotation = face.rotation || 0;
+
+    // Calculate base UV and size
+    let uvX, uvY, uvWidth, uvHeight;
+
+    // Handle face rotation (Blockbench rotates UV differently)
+    switch (rotation) {
+      case 90:
+        // Rotated 90 degrees clockwise
+        uvX = uv2;
+        uvY = uv1;
+        uvWidth = uv0 - uv2;
+        uvHeight = uv3 - uv1;
+        break;
+      
+      case 180:
+        // Rotated 180 degrees
+        uvX = uv2;
+        uvY = uv3;
+        uvWidth = uv0 - uv2;
+        uvHeight = uv1 - uv3;
+        break;
+      
+      case 270:
+        // Rotated 270 degrees clockwise (90 counter-clockwise)
+        uvX = uv0;
+        uvY = uv3;
+        uvWidth = uv2 - uv0;
+        uvHeight = uv1 - uv3;
+        break;
+      
+      default:
+        // No rotation (0 degrees)
+        // For up/down faces in Bedrock, UV origin is at opposite corner
+        if (faceName === 'up' || faceName === 'down') {
+          uvX = uv2;
+          uvY = uv3;
+          uvWidth = uv0 - uv2;
+          uvHeight = uv1 - uv3;
+        } else {
+          // For side faces (north, south, east, west)
+          uvX = uv0;
+          uvY = uv1;
+          uvWidth = uv2 - uv0;
+          uvHeight = uv3 - uv1;
+        }
+        break;
+    }
+
     return {
-      uv: [
-        roundit(fn0 + (0.016 * xSign)),
-        roundit(fn1 + (0.016 * ySign))
-      ],
-      uv_size: [
-        roundit((fn2 - fn0) - (0.016 * xSign)),
-        roundit((fn3 - fn1) - (0.016 * ySign))
-      ]
+      uv: [roundit(uvX), roundit(uvY)],
+      uv_size: [roundit(uvWidth), roundit(uvHeight)]
     };
   }
 
   /**
    * Convert Java element to Bedrock cube
-   * CORRECTED FORMULA based on Blockbench behavior
+   * CORRECTED FORMULA based on Blockbench behavior and auto-fix.js
    */
   convertElement(element, javaModel) {
     const from = element.from;
@@ -113,14 +100,13 @@ class JavaToBedrockConverter {
 
     const roundit = (val) => Math.round(val * 10000) / 10000;
 
-    // CORRECTED: Bedrock origin calculation
-    // Java coordinate system: center at [8, 0, 8]
-    // Bedrock coordinate system: center at [0, 0, 0]
-    // Origin is the CORNER of the cube (not center)
+    // CORRECTED: Bedrock origin calculation (from auto-fix.js)
+    // Java uses [8, 0, 8] as center, Bedrock uses [0, 0, 0]
+    // The formula needs to account for this AND the fact that origin is the CORNER not center
     const origin = [
-      roundit(8 - to[0]),       // X: flip and offset from center
-      roundit(from[1]),          // Y: stays the same
-      roundit(from[2] - 8)       // Z: offset from center
+      roundit(8 - to[0]),      // X: flip and offset
+      roundit(from[1]),         // Y: stays the same
+      roundit(from[2] - 8)      // Z: offset
     ];
 
     const size = [
@@ -137,7 +123,7 @@ class JavaToBedrockConverter {
       
       for (const [faceName, face] of Object.entries(element.faces)) {
         if (face && face.texture) {
-          const uv = this.calculateUV(face, face.texture, javaModel);
+          const uv = this.calculateUV(face, face.texture, javaModel, faceName);
           if (uv) {
             uvMap[faceName] = uv;
           }
@@ -149,19 +135,20 @@ class JavaToBedrockConverter {
       }
     }
 
-    // Convert rotation (corrected formula)
+    // Convert rotation (corrected formula from auto-fix.js)
     if (element.rotation) {
       const rotOrigin = element.rotation.origin;
       
       cube.pivot = [
-        roundit(8 - rotOrigin[0]),    // X: flip and offset
-        roundit(rotOrigin[1]),         // Y: stays the same
-        roundit(rotOrigin[2] - 8)      // Z: offset
+        roundit(8 - rotOrigin[0]),
+        roundit(rotOrigin[1]),
+        roundit(rotOrigin[2] - 8)
       ];
       
       const angle = element.rotation.angle;
       const axis = element.rotation.axis;
       
+      // Rotation angles need to be negated for X and Y, but not Z
       cube.rotation = [
         axis === 'x' ? -angle : 0,
         axis === 'y' ? -angle : 0,
@@ -218,10 +205,10 @@ class JavaToBedrockConverter {
 
   /**
    * Convert Java model to Bedrock format
+   * SIMPLIFIED: No atlas/spritesheet needed, use direct UV mapping
    */
   convert(javaModel, modelName, outputDir, assetsDir) {
-    // Always use 16x16 as texture dimensions (like converter.sh)
-    // UV coordinates are calculated relative to atlas, not texture size
+    // Always use 16x16 as texture dimensions
     this.textureWidth = 16;
     this.textureHeight = 16;
 
@@ -229,10 +216,7 @@ class JavaToBedrockConverter {
       throw new Error('No elements found in model');
     }
 
-    // Note: spritesheet is already generated at namespace level
-    // this.spritesheetData should already be set
-
-    // Group cubes by rotation (creates multiple rot_ bones like converter.sh)
+    // Group cubes by rotation (creates multiple rot_ bones)
     const { cubesWithoutRotation, rotationGroups } = this.groupCubesByRotation(
       javaModel.elements,
       javaModel
