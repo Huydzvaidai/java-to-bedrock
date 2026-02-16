@@ -35,7 +35,7 @@ class JavaToBedrockConverter {
 
   /**
    * Convert Java element to Bedrock cube
-   * CORRECTED FORMULA based on Blockbench behavior and auto-fix.js
+   * COMPLETELY REWRITTEN: Based on actual Blockbench import behavior
    */
   convertElement(element, javaModel) {
     const from = element.from;
@@ -43,13 +43,12 @@ class JavaToBedrockConverter {
 
     const roundit = (val) => Math.round(val * 10000) / 10000;
 
-    // CORRECTED: Bedrock origin calculation (from auto-fix.js)
-    // Java uses [8, 0, 8] as center, Bedrock uses [0, 0, 0]
-    // The formula needs to account for this AND the fact that origin is the CORNER not center
+    // Bedrock origin is at the MINIMUM corner (from), not maximum (to)
+    // Coordinate transformation: Java center [8,0,8] -> Bedrock center [0,0,0]
     const origin = [
-      roundit(8 - to[0]),      // X: flip and offset
-      roundit(from[1]),         // Y: stays the same
-      roundit(from[2] - 8)      // Z: offset
+      roundit(from[0] - 8),     // X: offset from center
+      roundit(from[1]),          // Y: stays the same
+      roundit(from[2] - 8)       // Z: offset from center
     ];
 
     const size = [
@@ -78,12 +77,12 @@ class JavaToBedrockConverter {
       }
     }
 
-    // Convert rotation (corrected formula from auto-fix.js)
+    // Convert rotation
     if (element.rotation) {
       const rotOrigin = element.rotation.origin;
       
       cube.pivot = [
-        roundit(8 - rotOrigin[0]),
+        roundit(rotOrigin[0] - 8),
         roundit(rotOrigin[1]),
         roundit(rotOrigin[2] - 8)
       ];
@@ -91,10 +90,10 @@ class JavaToBedrockConverter {
       const angle = element.rotation.angle;
       const axis = element.rotation.axis;
       
-      // Rotation angles need to be negated for X and Y, but not Z
+      // Rotation angles stay the same
       cube.rotation = [
-        axis === 'x' ? -angle : 0,
-        axis === 'y' ? -angle : 0,
+        axis === 'x' ? angle : 0,
+        axis === 'y' ? angle : 0,
         axis === 'z' ? angle : 0
       ];
     }
