@@ -11,12 +11,7 @@ class JavaToBedrockConverter {
 
   /**
    * Calculate UV coordinates for Bedrock
-   * NEW FORMULA: Based on Blockbench's actual UV mapping behavior
-   * 
-   * Key insights:
-   * 1. Java UV is in pixel coordinates [x1, y1, x2, y2]
-   * 2. Bedrock UV needs {uv: [x, y], uv_size: [width, height]}
-   * 3. Face rotation affects UV orientation
+   * SIMPLE DIRECT MAPPING: No transformation, just convert format
    */
   calculateUV(face, textureKey, javaModel, faceName) {
     if (!face || !face.uv) return null;
@@ -28,65 +23,13 @@ class JavaToBedrockConverter {
     // Round to 4 decimal places
     const roundit = (val) => Math.round(val * 10000) / 10000;
 
-    // Get Java UV coordinates (in pixels, 0-16 range)
-    const uv0 = face.uv[0];
-    const uv1 = face.uv[1];
-    const uv2 = face.uv[2];
-    const uv3 = face.uv[3];
-
-    // Check if face has rotation
-    const rotation = face.rotation || 0;
-
-    // Calculate base UV and size
-    let uvX, uvY, uvWidth, uvHeight;
-
-    // Handle face rotation (Blockbench rotates UV differently)
-    switch (rotation) {
-      case 90:
-        // Rotated 90 degrees clockwise
-        uvX = uv2;
-        uvY = uv1;
-        uvWidth = uv0 - uv2;
-        uvHeight = uv3 - uv1;
-        break;
-      
-      case 180:
-        // Rotated 180 degrees
-        uvX = uv2;
-        uvY = uv3;
-        uvWidth = uv0 - uv2;
-        uvHeight = uv1 - uv3;
-        break;
-      
-      case 270:
-        // Rotated 270 degrees clockwise (90 counter-clockwise)
-        uvX = uv0;
-        uvY = uv3;
-        uvWidth = uv2 - uv0;
-        uvHeight = uv1 - uv3;
-        break;
-      
-      default:
-        // No rotation (0 degrees)
-        // For up/down faces in Bedrock, UV origin is at opposite corner
-        if (faceName === 'up' || faceName === 'down') {
-          uvX = uv2;
-          uvY = uv3;
-          uvWidth = uv0 - uv2;
-          uvHeight = uv1 - uv3;
-        } else {
-          // For side faces (north, south, east, west)
-          uvX = uv0;
-          uvY = uv1;
-          uvWidth = uv2 - uv0;
-          uvHeight = uv3 - uv1;
-        }
-        break;
-    }
-
+    // Java UV format: [x1, y1, x2, y2]
+    // Bedrock UV format: {uv: [x, y], uv_size: [width, height]}
+    
+    // Direct conversion - no special handling
     return {
-      uv: [roundit(uvX), roundit(uvY)],
-      uv_size: [roundit(uvWidth), roundit(uvHeight)]
+      uv: [roundit(face.uv[0]), roundit(face.uv[1])],
+      uv_size: [roundit(face.uv[2] - face.uv[0]), roundit(face.uv[3] - face.uv[1])]
     };
   }
 
