@@ -105,6 +105,7 @@ class JavaToBedrockConverter {
 
   /**
    * Convert Java element to Bedrock cube
+   * CORRECTED FORMULA based on Blockbench behavior
    */
   convertElement(element, javaModel) {
     const from = element.from;
@@ -112,11 +113,14 @@ class JavaToBedrockConverter {
 
     const roundit = (val) => Math.round(val * 10000) / 10000;
 
-    // Calculate origin and size (exact formula from converter.sh)
+    // CORRECTED: Bedrock origin calculation
+    // Java coordinate system: center at [8, 0, 8]
+    // Bedrock coordinate system: center at [0, 0, 0]
+    // Origin is the CORNER of the cube (not center)
     const origin = [
-      roundit(-to[0] + 8),
-      roundit(from[1]),
-      roundit(from[2] - 8)
+      roundit(8 - to[0]),       // X: flip and offset from center
+      roundit(from[1]),          // Y: stays the same
+      roundit(from[2] - 8)       // Z: offset from center
     ];
 
     const size = [
@@ -145,12 +149,14 @@ class JavaToBedrockConverter {
       }
     }
 
-    // Convert rotation (exact formula from converter.sh)
+    // Convert rotation (corrected formula)
     if (element.rotation) {
+      const rotOrigin = element.rotation.origin;
+      
       cube.pivot = [
-        roundit(-element.rotation.origin[0] + 8),
-        roundit(element.rotation.origin[1]),
-        roundit(element.rotation.origin[2] - 8)
+        roundit(8 - rotOrigin[0]),    // X: flip and offset
+        roundit(rotOrigin[1]),         // Y: stays the same
+        roundit(rotOrigin[2] - 8)      // Z: offset
       ];
       
       const angle = element.rotation.angle;
